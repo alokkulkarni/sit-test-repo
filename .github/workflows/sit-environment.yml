@@ -1,0 +1,212 @@
+name: SIT Environment Management
+
+# This workflow manages the SIT environment using the docker-compose.yml file
+# located at the root of this repository (sit-test-repo/docker-compose.yml)
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'Action to perform'
+        required: true
+        type: choice
+        options:
+          - deploy
+          - teardown
+          - restart
+          - status
+      environment_name:
+        description: 'Environment name (used for tagging)'
+        required: false
+        default: 'sit'
+        type: string
+
+jobs:
+  manage-sit-environment:
+    runs-on: [self-hosted, macOS]
+    timeout-minutes: 30
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set environment variables
+        run: |
+          echo "ENVIRONMENT_NAME=${{ github.event.inputs.environment_name }}" >> $GITHUB_ENV
+          echo "COMPOSE_PROJECT_NAME=sit-${{ github.event.inputs.environment_name }}" >> $GITHUB_ENV
+          echo "TIMESTAMP=$(date +%Y%m%d-%H%M%S)" >> $GITHUB_ENV
+
+      - name: Verify Docker is running
+        run: |
+          if ! docker info > /dev/null 2>&1; then
+            echo "Error: Docker is not running"
+            exit 1
+          fi
+          echo "Docker is running"
+          docker --version
+          docker-compose --version || docker compose version
+
+      - name: Deploy SIT Environment
+        if: github.event.inputs.action == 'deploy'
+        run: |
+          echo "🚀 Deploying SIT environment: ${{ env.ENVIRONMENT_NAME }}"
+          
+          # Pull latest images
+          echo "📥 Pulling latest images..."
+          docker-compose pull || true
+          
+          # Start services
+          echo "🔧 Starting services..."
+          docker-compose up -d
+          
+          # Wait for services to be healthy
+          echo "⏳ Waiting for services to be healthy..."
+          timeout=300
+          elapsed=0
+          
+          while [ $elapsed -lt $timeout ]; do
+            healthy_count=$(docker-compose ps --format json | jq -r 'select(.Health == "healthy" or .Health == "") | .Name' | wc -l)
+            total_count=$(docker-compose ps --format json | jq -r '.Name' | wc -l)
+            
+            echo "Healthy services: $healthy_count/$total_count"
+            
+            if [ "$healthy_count" -eq "$total_count" ] && [ "$total_count" -gt 0 ]; then
+              echo "✅ All services are healthy!"
+              break
+            fi
+            
+            sleep 10
+            elapsed=$((elapsed + 10))
+          done
+          
+          if [ $elapsed -ge $timeout ]; then
+            echo "⚠️ Warning: Timeout waiting for all services to be healthy"
+            docker-compose ps
+            docker-compose logs --tail=50
+          fi
+
+      - name: Show Environment Status
+        if: github.event.inputs.action == 'status' || github.event.inputs.action == 'deploy'
+        run: |
+          echo "📊 SIT Environment Status"
+          echo "=========================="
+          echo ""
+          echo "🐳 Running Containers:"
+          docker-compose ps
+          echo ""
+          echo "🌐 Service Endpoints:"
+          echo "  - Beneficiaries API: http://localhost:8080"
+          echo "  - Payment Processor API: http://localhost:8081"
+          echo "  - Payment Consumer API: http://localhost:8082"
+          echo "  - PostgreSQL (Beneficiaries): localhost:5432"
+          echo "  - PostgreSQL (Payment Processor): localhost:5433"
+          echo "  - Redis: localhost:6379"
+          echo ""
+          echo "📦 Docker Volumes:"
+          docker volume ls | grep -E "beneficiaries|paymentprocessor|redis"
+          echo ""
+          echo "🔗 Docker Networks:"
+          docker network ls | grep payment-network
+
+      - name: Health Check Services
+        if: github.event.inputs.action == 'status' || github.event.inputs.action == 'deploy'
+        run: |
+          echo "🏥 Running Health Checks..."
+          echo ""
+          
+          # Function to check health
+          check_health() {
+            local url=$1
+            local name=$2
+            
+            if curl -sf "$url" > /dev/null 2>&1; then
+              echo "✅ $name is healthy"
+              return 0
+            else
+              echo "❌ $name is not responding"
+              return 1
+            fi
+          }
+          
+          # Wait a bit for services to fully start
+          sleep 5
+          
+          # Check each service
+          check_health "http://localhost:8080/actuator/health" "Beneficiaries API"
+          check_health "http://localhost:8081/actuator/health" "Payment Processor API"
+          check_health "http://localhost:8082/actuator/health" "Payment Consumer API"
+
+      - name: Restart SIT Environment
+        if: github.event.inputs.action == 'restart'
+        run: |
+          echo "🔄 Restarting SIT environment..."
+          docker-compose restart
+          
+          echo "⏳ Waiting for services to restart..."
+          sleep 30
+          
+          echo "📊 Environment status after restart:"
+          docker-compose ps
+
+      - name: Teardown SIT Environment
+        if: github.event.inputs.action == 'teardown'
+        run: |
+          echo "🧹 Tearing down SIT environment: ${{ env.ENVIRONMENT_NAME }}"
+          
+          # Stop and remove containers
+          echo "🛑 Stopping containers..."
+          docker-compose down
+          
+          # Optionally remove volumes (commented out for safety)
+          # Uncomment the following lines if you want to remove data volumes
+          # echo "🗑️ Removing volumes..."
+          # docker-compose down -v
+          
+          echo "✅ Environment teardown complete"
+
+      - name: Collect Logs on Failure
+        if: failure()
+        run: |
+          echo "📋 Collecting logs for debugging..."
+          mkdir -p logs
+          
+          # Save container logs
+          docker-compose logs --tail=200 > logs/compose-logs-${{ env.TIMESTAMP }}.log 2>&1 || true
+          
+          # Save container status
+          docker-compose ps > logs/compose-status-${{ env.TIMESTAMP }}.txt 2>&1 || true
+          
+          # Save docker info
+          docker info > logs/docker-info-${{ env.TIMESTAMP }}.txt 2>&1 || true
+          
+          echo "Logs saved to logs directory"
+          ls -lah logs/
+
+      - name: Upload Logs as Artifact
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sit-logs-${{ env.TIMESTAMP }}
+          path: logs/
+          retention-days: 7
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "## SIT Environment Management Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Action:** ${{ github.event.inputs.action }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Environment:** ${{ env.ENVIRONMENT_NAME }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Timestamp:** ${{ env.TIMESTAMP }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Status:** ${{ job.status }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [ "${{ github.event.inputs.action }}" == "deploy" ] || [ "${{ github.event.inputs.action }}" == "status" ]; then
+            echo "### 🌐 Service Endpoints" >> $GITHUB_STEP_SUMMARY
+            echo "- **Beneficiaries API:** http://localhost:8080" >> $GITHUB_STEP_SUMMARY
+            echo "- **Payment Processor API:** http://localhost:8081" >> $GITHUB_STEP_SUMMARY
+            echo "- **Payment Consumer API:** http://localhost:8082" >> $GITHUB_STEP_SUMMARY
+            echo "- **PostgreSQL (Beneficiaries):** localhost:5432" >> $GITHUB_STEP_SUMMARY
+            echo "- **PostgreSQL (Payment Processor):** localhost:5433" >> $GITHUB_STEP_SUMMARY
+            echo "- **Redis:** localhost:6379" >> $GITHUB_STEP_SUMMARY
+          fi

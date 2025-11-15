@@ -1,0 +1,163 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database for beneficiaries
+  beneficiaries-db:
+    image: ghcr.io/alokkulkarni/testcontainers-registry/testcontainers/postgres:16-alpine
+    container_name: beneficiaries-postgres
+    environment:
+      POSTGRES_DB: beneficiaries
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - beneficiaries-db-data:/var/lib/postgresql/data
+      - ./beneficiaries/src/test/resources/init.db:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d beneficiaries"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - payment-network
+
+  # PostgreSQL Database for paymentprocessor
+  paymentprocessor-db:
+    image: ghcr.io/alokkulkarni/testcontainers-registry/testcontainers/postgres:16-alpine
+    container_name: paymentprocessor-postgres
+    environment:
+      POSTGRES_DB: paymentprocessor
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5433:5432"
+    volumes:
+      - paymentprocessor-db-data:/var/lib/postgresql/data
+      - ./paymentprocessor/src/test/resources/init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d paymentprocessor"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - payment-network
+
+  # Redis for beneficiaries
+  redis:
+    image: ghcr.io/alokkulkarni/testcontainers-registry/testcontainers/redis:7-alpine
+    container_name: beneficiaries-redis
+    command: redis-server --appendonly yes
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - payment-network
+
+  # Beneficiaries Application
+  beneficiaries:
+    image: ghcr.io/alokkulkarni/beneficiaries:latest
+    container_name: beneficiaries-app
+    environment:
+      SERVER_PORT: 8080
+      SPRING_DATASOURCE_URL: jdbc:postgresql://beneficiaries-db:5432/beneficiaries
+      SPRING_DATASOURCE_USERNAME: postgres
+      SPRING_DATASOURCE_PASSWORD: postgres
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ""
+      HEALTH_DETAILS: always
+      LOG_LEVEL_ROOT: INFO
+      LOG_LEVEL_APP: INFO
+      LOG_LEVEL_JDBC: INFO
+      HIBERNATE_DDL_AUTO: update
+      TIMEZONE: UTC
+    ports:
+      - "8080:8080"
+    depends_on:
+      beneficiaries-db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/actuator/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - payment-network
+    restart: unless-stopped
+
+  # Payment Processor Application
+  paymentprocessor:
+    image: ghcr.io/alokkulkarni/paymentprocessor:latest
+    container_name: paymentprocessor-app
+    environment:
+      SERVER_PORT: 8081
+      SPRING_DATASOURCE_URL: jdbc:postgresql://paymentprocessor-db:5432/paymentprocessor
+      SPRING_DATASOURCE_USERNAME: postgres
+      SPRING_DATASOURCE_PASSWORD: postgres
+      HEALTH_DETAILS: always
+      LOG_LEVEL_ROOT: INFO
+      LOG_LEVEL_APP: INFO
+      LOG_LEVEL_JDBC: INFO
+      HIBERNATE_DDL_AUTO: update
+      TIMEZONE: UTC
+    ports:
+      - "8081:8081"
+    depends_on:
+      paymentprocessor-db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8081/actuator/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - payment-network
+    restart: unless-stopped
+
+  # Payment Consumer Application
+  paymentconsumer:
+    build:
+      context: ./paymentConsumer
+      dockerfile: Dockerfile
+    container_name: paymentconsumer-app
+    environment:
+      SERVER_PORT: 8082
+      HEALTH_DETAILS: always
+      LOG_LEVEL_ROOT: INFO
+      LOG_LEVEL_APP: INFO
+      TIMEZONE: UTC
+    ports:
+      - "8082:8082"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8082/actuator/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - payment-network
+    restart: unless-stopped
+
+networks:
+  payment-network:
+    driver: bridge
+    name: payment-network
+
+volumes:
+  beneficiaries-db-data:
+    name: beneficiaries-db-data
+  paymentprocessor-db-data:
+    name: paymentprocessor-db-data
+  redis-data:
+    name: redis-data
