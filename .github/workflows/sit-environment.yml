@@ -24,7 +24,7 @@ on:
 
 jobs:
   manage-sit-environment:
-    runs-on: [self-hosted, macOS]
+    runs-on: [self-hosted, macOS, sit-env-create]
     timeout-minutes: 30
     
     steps:
