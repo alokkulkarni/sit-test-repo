@@ -126,28 +126,28 @@ services:
     restart: unless-stopped
 
   # Payment Consumer Application
-  paymentconsumer:
-    build:
-      context: ./paymentConsumer
-      dockerfile: Dockerfile
-    container_name: paymentconsumer-app
-    environment:
-      SERVER_PORT: 8082
-      HEALTH_DETAILS: always
-      LOG_LEVEL_ROOT: INFO
-      LOG_LEVEL_APP: INFO
-      TIMEZONE: UTC
-    ports:
-      - "${PAYMENTCONSUMER_PORT:-8082}:8082"
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8082/actuator/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
-    networks:
-      - payment-network
-    restart: unless-stopped
+  # paymentconsumer:
+  #   build:
+  #     context: ../paymentConsumer
+  #     dockerfile: Dockerfile
+  #   container_name: paymentconsumer-app
+  #   environment:
+  #     SERVER_PORT: 8082
+  #     HEALTH_DETAILS: always
+  #     LOG_LEVEL_ROOT: INFO
+  #     LOG_LEVEL_APP: INFO
+  #     TIMEZONE: UTC
+  #   ports:
+  #     - "${PAYMENTCONSUMER_PORT:-8082}:8082"
+  #   healthcheck:
+  #     test: ["CMD", "curl", "-f", "http://localhost:8082/actuator/health"]
+  #     interval: 30s
+  #     timeout: 10s
+  #     retries: 3
+  #     start_period: 40s
+  #   networks:
+  #     - payment-network
+  #   restart: unless-stopped
 
 networks:
   payment-network:
