@@ -10,7 +10,7 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
     ports:
-      - "5432:5432"
+      - "${BENEFICIARIES_DB_PORT:-5432}:5432"
     volumes:
       - beneficiaries-db-data:/var/lib/postgresql/data
       - ./beneficiaries/src/test/resources/init.db:/docker-entrypoint-initdb.d/init.sql
@@ -31,7 +31,7 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
     ports:
-      - "5433:5432"
+      - "${PAYMENTPROCESSOR_DB_PORT:-5433}:5432"
     volumes:
       - paymentprocessor-db-data:/var/lib/postgresql/data
       - ./paymentprocessor/src/test/resources/init.sql:/docker-entrypoint-initdb.d/init.sql
@@ -49,7 +49,7 @@ services:
     container_name: beneficiaries-redis
     command: redis-server --appendonly yes
     ports:
-      - "6379:6379"
+      - "${REDIS_PORT:-6379}:6379"
     volumes:
       - redis-data:/data
     healthcheck:
@@ -79,7 +79,7 @@ services:
       HIBERNATE_DDL_AUTO: update
       TIMEZONE: UTC
     ports:
-      - "8080:8080"
+      - "${BENEFICIARIES_PORT:-8080}:8080"
     depends_on:
       beneficiaries-db:
         condition: service_healthy
@@ -111,7 +111,7 @@ services:
       HIBERNATE_DDL_AUTO: update
       TIMEZONE: UTC
     ports:
-      - "8081:8081"
+      - "${PAYMENTPROCESSOR_PORT:-8081}:8081"
     depends_on:
       paymentprocessor-db:
         condition: service_healthy
@@ -138,7 +138,7 @@ services:
       LOG_LEVEL_APP: INFO
       TIMEZONE: UTC
     ports:
-      - "8082:8082"
+      - "${PAYMENTCONSUMER_PORT:-8082}:8082"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8082/actuator/health"]
       interval: 30s

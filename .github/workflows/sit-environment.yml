@@ -12,13 +12,14 @@ on:
         type: choice
         options:
           - deploy
+          - stop
           - teardown
           - restart
           - status
+          - list-all
       environment_name:
-        description: 'Environment name (used for tagging)'
-        required: false
-        default: 'sit'
+        description: 'Environment name - use your username or unique identifier (e.g., john-dev, alice-test)'
+        required: true
         type: string
 
 jobs:
@@ -32,9 +33,47 @@ jobs:
 
       - name: Set environment variables
         run: |
-          echo "ENVIRONMENT_NAME=${{ github.event.inputs.environment_name }}" >> $GITHUB_ENV
-          echo "COMPOSE_PROJECT_NAME=sit-${{ github.event.inputs.environment_name }}" >> $GITHUB_ENV
+          # Sanitize environment name (remove special chars, lowercase)
+          SANITIZED_NAME=$(echo "${{ github.event.inputs.environment_name }}" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]/-/g')
+          echo "ENVIRONMENT_NAME=${SANITIZED_NAME}" >> $GITHUB_ENV
+          echo "COMPOSE_PROJECT_NAME=sit-${SANITIZED_NAME}" >> $GITHUB_ENV
           echo "TIMESTAMP=$(date +%Y%m%d-%H%M%S)" >> $GITHUB_ENV
+          
+          # Calculate unique port assignments based on environment name hash
+          # This allows multiple environments to run simultaneously without port conflicts
+          HASH=$(echo -n "${SANITIZED_NAME}" | shasum | cut -c1-4)
+          PORT_OFFSET=$((0x${HASH} % 900 + 100))  # Range: 100-999
+          
+          # Calculate unique ports for each service
+          # Base ports: 8080, 8081, 8082, 5432, 5433, 6379
+          BENEFICIARIES_PORT=$((8000 + PORT_OFFSET))
+          PAYMENTPROCESSOR_PORT=$((8000 + PORT_OFFSET + 1))
+          PAYMENTCONSUMER_PORT=$((8000 + PORT_OFFSET + 2))
+          BENEFICIARIES_DB_PORT=$((5000 + PORT_OFFSET))
+          PAYMENTPROCESSOR_DB_PORT=$((5000 + PORT_OFFSET + 1))
+          REDIS_PORT=$((6000 + PORT_OFFSET))
+          
+          # Export to environment
+          echo "PORT_OFFSET=${PORT_OFFSET}" >> $GITHUB_ENV
+          echo "BENEFICIARIES_PORT=${BENEFICIARIES_PORT}" >> $GITHUB_ENV
+          echo "PAYMENTPROCESSOR_PORT=${PAYMENTPROCESSOR_PORT}" >> $GITHUB_ENV
+          echo "PAYMENTCONSUMER_PORT=${PAYMENTCONSUMER_PORT}" >> $GITHUB_ENV
+          echo "BENEFICIARIES_DB_PORT=${BENEFICIARIES_DB_PORT}" >> $GITHUB_ENV
+          echo "PAYMENTPROCESSOR_DB_PORT=${PAYMENTPROCESSOR_DB_PORT}" >> $GITHUB_ENV
+          echo "REDIS_PORT=${REDIS_PORT}" >> $GITHUB_ENV
+          
+          # Display port assignments
+          echo "📍 Port Assignments for ${SANITIZED_NAME}:"
+          echo "   Beneficiaries API: ${BENEFICIARIES_PORT}"
+          echo "   Payment Processor API: ${PAYMENTPROCESSOR_PORT}"
+          echo "   Payment Consumer API: ${PAYMENTCONSUMER_PORT}"
+          echo "   Beneficiaries DB: ${BENEFICIARIES_DB_PORT}"
+          echo "   Payment Processor DB: ${PAYMENTPROCESSOR_DB_PORT}"
+          echo "   Redis: ${REDIS_PORT}"
+          
+          # Store environment metadata
+          echo "GITHUB_ACTOR=${{ github.actor }}" >> $GITHUB_ENV
+          echo "WORKFLOW_RUN_ID=${{ github.run_id }}" >> $GITHUB_ENV
 
       - name: Verify Docker is running
         run: |
@@ -46,18 +85,72 @@ jobs:
           docker --version
           docker-compose --version || docker compose version
 
+      - name: List All Environments
+        if: github.event.inputs.action == 'list-all'
+        run: |
+          echo "📋 Listing all SIT environments on this runner"
+          echo "=========================================="
+          echo ""
+          
+          # List all containers with sit- prefix
+          echo "🐳 Running SIT Containers:"
+          docker ps --filter "name=sit-" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" || echo "No SIT containers running"
+          echo ""
+          
+          # List all sit- volumes
+          echo "💾 SIT Volumes:"
+          docker volume ls --filter "name=sit-" --format "table {{.Name}}\t{{.Driver}}" || echo "No SIT volumes found"
+          echo ""
+          
+          # List all sit- networks
+          echo "🔗 SIT Networks:"
+          docker network ls --filter "name=sit-" --format "table {{.Name}}\t{{.Driver}}" || echo "No SIT networks found"
+          echo ""
+          
+          # Show compose projects
+          echo "📦 Active Compose Projects:"
+          docker compose ls --filter "name=sit-" 2>/dev/null || echo "No active SIT compose projects"
+          echo ""
+          
+          echo "💡 Tip: Use the environment name from the container/volume names to manage specific environments"
+
       - name: Deploy SIT Environment
         if: github.event.inputs.action == 'deploy'
         run: |
-          echo "🚀 Deploying SIT environment: ${{ env.ENVIRONMENT_NAME }}"
+          echo "🚀 Deploying SIT environment: ${ENVIRONMENT_NAME}"
+          echo "👤 Deployed by: ${GITHUB_ACTOR}"
+          echo "🔢 Workflow Run ID: ${WORKFLOW_RUN_ID}"
+          echo "📦 Compose Project: ${COMPOSE_PROJECT_NAME}"
+          echo ""
+          
+          # Check if environment already exists
+          if docker compose ps --format json 2>/dev/null | jq -e '.Name' > /dev/null 2>&1; then
+            echo "⚠️  Warning: Environment '${ENVIRONMENT_NAME}' already exists!"
+            echo "Existing containers:"
+            docker compose ps
+            echo ""
+            read -p "Do you want to recreate it? (y/N) " -n 1 -r || true
+            echo ""
+            if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+              echo "❌ Deployment cancelled"
+              exit 1
+            fi
+          fi
           
           # Pull latest images
           echo "📥 Pulling latest images..."
-          docker-compose pull || true
+          docker compose pull || true
           
-          # Start services
+          # Start services with labels for tracking
           echo "🔧 Starting services..."
-          docker-compose up -d
+          export COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME}"
+          export BENEFICIARIES_PORT="${BENEFICIARIES_PORT}"
+          export PAYMENTPROCESSOR_PORT="${PAYMENTPROCESSOR_PORT}"
+          export PAYMENTCONSUMER_PORT="${PAYMENTCONSUMER_PORT}"
+          export BENEFICIARIES_DB_PORT="${BENEFICIARIES_DB_PORT}"
+          export PAYMENTPROCESSOR_DB_PORT="${PAYMENTPROCESSOR_DB_PORT}"
+          export REDIS_PORT="${REDIS_PORT}"
+          docker compose up -d --force-recreate
           
           # Wait for services to be healthy
           echo "⏳ Waiting for services to be healthy..."
@@ -86,21 +179,23 @@ jobs:
           fi
 
       - name: Show Environment Status
-        if: github.event.inputs.action == 'status' || github.event.inputs.action == 'deploy'
+        if: github.event.inputs.action == 'status' || github.event.inputs.action == 'deploy' || github.event.inputs.action == 'stop'
         run: |
           echo "📊 SIT Environment Status"
           echo "=========================="
+          echo "Environment Name: ${ENVIRONMENT_NAME}"
+          echo "Compose Project: ${COMPOSE_PROJECT_NAME}"
           echo ""
-          echo "🐳 Running Containers:"
-          docker-compose ps
+          echo "🐳 Containers:"
+          docker compose ps -a
           echo ""
           echo "🌐 Service Endpoints:"
-          echo "  - Beneficiaries API: http://localhost:8080"
-          echo "  - Payment Processor API: http://localhost:8081"
-          echo "  - Payment Consumer API: http://localhost:8082"
-          echo "  - PostgreSQL (Beneficiaries): localhost:5432"
-          echo "  - PostgreSQL (Payment Processor): localhost:5433"
-          echo "  - Redis: localhost:6379"
+          echo "  - Beneficiaries API: http://localhost:${BENEFICIARIES_PORT}"
+          echo "  - Payment Processor API: http://localhost:${PAYMENTPROCESSOR_PORT}"
+          echo "  - Payment Consumer API: http://localhost:${PAYMENTCONSUMER_PORT}"
+          echo "  - PostgreSQL (Beneficiaries): localhost:${BENEFICIARIES_DB_PORT}"
+          echo "  - PostgreSQL (Payment Processor): localhost:${PAYMENTPROCESSOR_DB_PORT}"
+          echo "  - Redis: localhost:${REDIS_PORT}"
           echo ""
           echo "📦 Docker Volumes:"
           docker volume ls | grep -E "beneficiaries|paymentprocessor|redis"
@@ -132,37 +227,82 @@ jobs:
           sleep 5
           
           # Check each service
-          check_health "http://localhost:8080/actuator/health" "Beneficiaries API"
-          check_health "http://localhost:8081/actuator/health" "Payment Processor API"
-          check_health "http://localhost:8082/actuator/health" "Payment Consumer API"
+          check_health "http://localhost:${BENEFICIARIES_PORT}/actuator/health" "Beneficiaries API"
+          check_health "http://localhost:${PAYMENTPROCESSOR_PORT}/actuator/health" "Payment Processor API"
+          check_health "http://localhost:${PAYMENTCONSUMER_PORT}/actuator/health" "Payment Consumer API"
+
+      - name: Stop SIT Environment
+        if: github.event.inputs.action == 'stop'
+        run: |
+          echo "⏸️  Stopping SIT environment: ${ENVIRONMENT_NAME}"
+          echo "📦 Compose Project: ${COMPOSE_PROJECT_NAME}"
+          echo ""
+          
+          # Stop containers but keep them for later restart
+          echo "🛑 Stopping containers (volumes and data preserved)..."
+          docker compose stop
+          
+          echo "✅ Environment stopped successfully"
+          echo ""
+          echo "💡 To restart: Use 'restart' action with environment name: ${ENVIRONMENT_NAME}"
+          echo "💡 To remove completely: Use 'teardown' action"
+          echo ""
+          echo "Current status:"
+          docker compose ps -a
 
       - name: Restart SIT Environment
         if: github.event.inputs.action == 'restart'
         run: |
-          echo "🔄 Restarting SIT environment..."
-          docker-compose restart
+          echo "🔄 Restarting SIT environment: ${ENVIRONMENT_NAME}"
+          echo "📦 Compose Project: ${COMPOSE_PROJECT_NAME}"
+          echo ""
+          
+          # Check if environment exists
+          if ! docker compose ps -a --format json 2>/dev/null | jq -e '.Name' > /dev/null 2>&1; then
+            echo "❌ Environment '${ENVIRONMENT_NAME}' not found!"
+            echo "💡 Use 'list-all' action to see available environments"
+            echo "💡 Use 'deploy' action to create a new environment"
+            exit 1
+          fi
+          
+          docker compose restart
           
           echo "⏳ Waiting for services to restart..."
           sleep 30
           
           echo "📊 Environment status after restart:"
-          docker-compose ps
+          docker compose ps
 
       - name: Teardown SIT Environment
         if: github.event.inputs.action == 'teardown'
         run: |
-          echo "🧹 Tearing down SIT environment: ${{ env.ENVIRONMENT_NAME }}"
+          echo "🧹 Tearing down SIT environment: ${ENVIRONMENT_NAME}"
+          echo "📦 Compose Project: ${COMPOSE_PROJECT_NAME}"
+          echo "⚠️  WARNING: This will remove all containers!"
+          echo ""
+          
+          # Check if environment exists
+          if ! docker compose ps -a --format json 2>/dev/null | jq -e '.Name' > /dev/null 2>&1; then
+            echo "ℹ️  Environment '${ENVIRONMENT_NAME}' not found or already removed"
+            exit 0
+          fi
+          
+          # Show what will be removed
+          echo "📋 Components to be removed:"
+          docker compose ps -a
+          echo ""
           
           # Stop and remove containers
-          echo "🛑 Stopping containers..."
-          docker-compose down
+          echo "🛑 Stopping and removing containers..."
+          docker compose down
           
           # Optionally remove volumes (commented out for safety)
           # Uncomment the following lines if you want to remove data volumes
           # echo "🗑️ Removing volumes..."
-          # docker-compose down -v
+          # docker compose down -v
           
           echo "✅ Environment teardown complete"
+          echo "💡 Volumes preserved. To remove volumes, manually run: docker compose down -v"
 
       - name: Collect Logs on Failure
         if: failure()
@@ -171,13 +311,13 @@ jobs:
           mkdir -p logs
           
           # Save container logs
-          docker-compose logs --tail=200 > logs/compose-logs-${{ env.TIMESTAMP }}.log 2>&1 || true
+          docker compose logs --tail=200 > logs/compose-logs-${TIMESTAMP}.log 2>&1 || true
           
           # Save container status
-          docker-compose ps > logs/compose-status-${{ env.TIMESTAMP }}.txt 2>&1 || true
+          docker compose ps -a > logs/compose-status-${TIMESTAMP}.txt 2>&1 || true
           
           # Save docker info
-          docker info > logs/docker-info-${{ env.TIMESTAMP }}.txt 2>&1 || true
+          docker info > logs/docker-info-${TIMESTAMP}.txt 2>&1 || true
           
           echo "Logs saved to logs directory"
           ls -lah logs/
@@ -186,7 +326,7 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: sit-logs-${{ env.TIMESTAMP }}
+          name: sit-logs-${{ github.event.inputs.environment_name }}-${{ github.run_id }}
           path: logs/
           retention-days: 7
 
@@ -196,17 +336,41 @@ jobs:
           echo "## SIT Environment Management Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Action:** ${{ github.event.inputs.action }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Environment:** ${{ env.ENVIRONMENT_NAME }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Timestamp:** ${{ env.TIMESTAMP }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Environment Name:** ${ENVIRONMENT_NAME}" >> $GITHUB_STEP_SUMMARY
+          echo "**Compose Project:** ${COMPOSE_PROJECT_NAME}" >> $GITHUB_STEP_SUMMARY
+          echo "**Deployed By:** ${GITHUB_ACTOR}" >> $GITHUB_STEP_SUMMARY
+          echo "**Timestamp:** ${TIMESTAMP}" >> $GITHUB_STEP_SUMMARY
           echo "**Status:** ${{ job.status }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "---" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 📝 Quick Reference" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "To manage this environment, use these commands:" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
+          echo "# Via GitHub CLI" >> $GITHUB_STEP_SUMMARY
+          echo "gh workflow run sit-environment.yml -f action=status -f environment_name=${ENVIRONMENT_NAME}" >> $GITHUB_STEP_SUMMARY
+          echo "gh workflow run sit-environment.yml -f action=stop -f environment_name=${ENVIRONMENT_NAME}" >> $GITHUB_STEP_SUMMARY
+          echo "gh workflow run sit-environment.yml -f action=restart -f environment_name=${ENVIRONMENT_NAME}" >> $GITHUB_STEP_SUMMARY
+          echo "gh workflow run sit-environment.yml -f action=teardown -f environment_name=${ENVIRONMENT_NAME}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "# List all environments" >> $GITHUB_STEP_SUMMARY
+          echo "gh workflow run sit-environment.yml -f action=list-all -f environment_name=dummy" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           
           if [ "${{ github.event.inputs.action }}" == "deploy" ] || [ "${{ github.event.inputs.action }}" == "status" ]; then
-            echo "### 🌐 Service Endpoints" >> $GITHUB_STEP_SUMMARY
-            echo "- **Beneficiaries API:** http://localhost:8080" >> $GITHUB_STEP_SUMMARY
-            echo "- **Payment Processor API:** http://localhost:8081" >> $GITHUB_STEP_SUMMARY
-            echo "- **Payment Consumer API:** http://localhost:8082" >> $GITHUB_STEP_SUMMARY
-            echo "- **PostgreSQL (Beneficiaries):** localhost:5432" >> $GITHUB_STEP_SUMMARY
-            echo "- **PostgreSQL (Payment Processor):** localhost:5433" >> $GITHUB_STEP_SUMMARY
-            echo "- **Redis:** localhost:6379" >> $GITHUB_STEP_SUMMARY
+            echo "### 🌐 Service Endpoints (Port Offset: ${PORT_OFFSET})" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "| Service | Endpoint | Port |" >> $GITHUB_STEP_SUMMARY
+            echo "|---------|----------|------|" >> $GITHUB_STEP_SUMMARY
+            echo "| Beneficiaries API | http://localhost:${BENEFICIARIES_PORT} | ${BENEFICIARIES_PORT} |" >> $GITHUB_STEP_SUMMARY
+            echo "| Payment Processor API | http://localhost:${PAYMENTPROCESSOR_PORT} | ${PAYMENTPROCESSOR_PORT} |" >> $GITHUB_STEP_SUMMARY
+            echo "| Payment Consumer API | http://localhost:${PAYMENTCONSUMER_PORT} | ${PAYMENTCONSUMER_PORT} |" >> $GITHUB_STEP_SUMMARY
+            echo "| PostgreSQL (Beneficiaries) | localhost:${BENEFICIARIES_DB_PORT} | ${BENEFICIARIES_DB_PORT} |" >> $GITHUB_STEP_SUMMARY
+            echo "| PostgreSQL (Payment Processor) | localhost:${PAYMENTPROCESSOR_DB_PORT} | ${PAYMENTPROCESSOR_DB_PORT} |" >> $GITHUB_STEP_SUMMARY
+            echo "| Redis | localhost:${REDIS_PORT} | ${REDIS_PORT} |" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "💡 **Tip:** Save these port numbers! They're unique to your environment name (${ENVIRONMENT_NAME})" >> $GITHUB_STEP_SUMMARY
           fi

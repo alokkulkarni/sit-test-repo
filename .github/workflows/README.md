@@ -1,6 +1,10 @@
 # SIT Environment Management Workflow
 
-This GitHub Actions workflow allows you to manage an on-demand System Integration Testing (SIT) environment using Docker Compose on a macOS self-hosted runner.
+This GitHub Actions workflow allows you to manage on-demand System Integration Testing (SIT) environments using Docker Compose on a macOS self-hosted runner. **Multiple users can safely run isolated environments simultaneously.**
+
+## Quick Start
+
+📖 **For detailed usage guide, see:** [ENVIRONMENT_MANAGEMENT_GUIDE.md](../../ENVIRONMENT_MANAGEMENT_GUIDE.md)
 
 ## Prerequisites
 
@@ -9,37 +13,76 @@ This GitHub Actions workflow allows you to manage an on-demand System Integratio
 3. **Docker Compose**: Docker Compose must be available (comes with Docker Desktop)
 4. **Network Access**: The runner must have access to pull images from GitHub Container Registry
 
-## Workflow Features
+## Available Actions
 
-The workflow supports four actions:
+The workflow supports **six actions**:
 
-### 1. Deploy
-Deploys a complete SIT environment with all services:
-- Pulls latest Docker images
-- Starts all containers defined in `docker-compose.yml`
-- Waits for services to become healthy
-- Performs health checks on all APIs
-- Provides service endpoint information
+### 1. 🚀 **deploy** - Create New Environment
+Deploys a complete SIT environment with all services, pulls latest images, waits for health checks.
 
-### 2. Status
-Checks the current status of the SIT environment:
-- Lists all running containers
-- Shows service endpoints
-- Displays Docker volumes and networks
-- Performs health checks on all APIs
+### 2. ⏸️ **stop** - Pause Environment *(NEW)*
+Stops all containers but preserves data and configuration. Use when taking a break or freeing up resources temporarily.
 
-### 3. Restart
-Restarts all services in the SIT environment:
-- Restarts containers without removing them
-- Preserves data volumes
-- Waits for services to restart
+### 3. 🔄 **restart** - Resume/Restart Environment
+Restarts stopped containers or refreshes running ones. Use to resume work after `stop` or to recover from issues.
 
-### 4. Teardown
-Tears down the SIT environment:
-- Stops all containers
-- Removes containers
-- **Note**: Data volumes are preserved by default (for safety)
-- To remove volumes, uncomment the volume removal lines in the workflow
+### 4. 📊 **status** - Check Environment Status
+Shows detailed status, health checks, and service endpoints.
+
+### 5. 🧹 **teardown** - Remove Environment
+Completely removes containers (preserves volumes by default).
+
+### 6. 📋 **list-all** - See All Environments *(NEW)*
+Lists all SIT environments on the runner, showing containers, volumes, and networks.
+
+## Multi-User Support
+
+### Environment Isolation
+
+Each user creates an **isolated environment** using a unique environment name:
+
+```bash
+# User: John
+gh workflow run sit-environment.yml -f action=deploy -f environment_name=john-dev
+
+# User: Alice  
+gh workflow run sit-environment.yml -f action=deploy -f environment_name=alice-test
+```
+
+**Result:**
+- ✅ Separate Docker containers: `sit-john-dev-*` and `sit-alice-test-*`
+- ✅ Isolated data volumes
+- ✅ Independent lifecycle (stop, restart, teardown)
+- ✅ No port conflicts (managed automatically)
+
+### Identifying Your Environment
+
+**Method 1: Workflow Summary**
+After running any action, check the GitHub Actions summary page for your environment details.
+
+**Method 2: List All Environments**
+```bash
+gh workflow run sit-environment.yml -f action=list-all -f environment_name=dummy
+```
+
+**Method 3: Docker Commands (on runner)**
+```bash
+docker compose ls | grep sit-
+docker ps --filter "name=sit-"
+```
+
+### Environment Naming Best Practices
+
+**Good:**
+- `john-dev` - User's development environment
+- `alice-test` - User's testing environment  
+- `sprint-23` - Sprint-specific testing
+- `feature-auth` - Feature branch testing
+
+**Avoid:**
+- `sit` - Too generic
+- `test123` - Not descriptive
+- `my env` - Spaces (will be sanitized)
 
 ## How to Use
 
@@ -49,28 +92,80 @@ Tears down the SIT environment:
 2. Click on **Actions** tab
 3. Select **SIT Environment Management** workflow
 4. Click **Run workflow** button
-5. Select the desired action from the dropdown:
-   - `deploy` - Deploy new environment
-   - `teardown` - Remove environment
-   - `restart` - Restart services
-   - `status` - Check environment status
-6. (Optional) Enter a custom environment name (default: `sit`)
+5. Select the desired action from the dropdown
+6. **Enter your unique environment name** (e.g., `john-dev`, `alice-test`)
 7. Click **Run workflow**
 
 ### Via GitHub CLI
 
 ```bash
-# Deploy SIT environment
-gh workflow run sit-environment.yml -f action=deploy -f environment_name=sit
+# Deploy new environment
+gh workflow run sit-environment.yml -f action=deploy -f environment_name=john-dev
+
+# Stop environment (pause, keep data)
+gh workflow run sit-environment.yml -f action=stop -f environment_name=john-dev
+
+# Restart environment
+gh workflow run sit-environment.yml -f action=restart -f environment_name=john-dev
 
 # Check status
-gh workflow run sit-environment.yml -f action=status -f environment_name=sit
+gh workflow run sit-environment.yml -f action=status -f environment_name=john-dev
 
-# Restart services
-gh workflow run sit-environment.yml -f action=restart -f environment_name=sit
+# List all environments
+gh workflow run sit-environment.yml -f action=list-all -f environment_name=dummy
 
-# Teardown environment
-gh workflow run sit-environment.yml -f action=teardown -f environment_name=sit
+# Teardown environment (remove containers)
+gh workflow run sit-environment.yml -f action=teardown -f environment_name=john-dev
+```
+
+## Understanding Actions: stop vs teardown vs restart
+
+| Action | Containers | Data | Use Case |
+|--------|-----------|------|----------|
+| **stop** | Stopped (preserved) | ✅ Kept | Taking a break, lunch, end of day |
+| **restart** | Restarted | ✅ Kept | Resume after stop, refresh services |
+| **teardown** | ❌ Removed | ⚠️ Volumes kept* | Finished testing, cleanup |
+
+*Volumes are preserved by default for safety. To remove: `docker compose down -v`
+
+## Common Workflows
+
+### Daily Development
+```bash
+# Morning: Deploy
+gh workflow run sit-environment.yml -f action=deploy -f environment_name=john-dev
+
+# Lunch: Stop (optional)
+gh workflow run sit-environment.yml -f action=stop -f environment_name=john-dev
+
+# After lunch: Restart
+gh workflow run sit-environment.yml -f action=restart -f environment_name=john-dev
+
+# End of day: Teardown
+gh workflow run sit-environment.yml -f action=teardown -f environment_name=john-dev
+```
+
+### Testing a Feature
+```bash
+# 1. Deploy for feature
+gh workflow run sit-environment.yml -f action=deploy -f environment_name=feature-auth
+
+# 2. Run tests (your code)
+
+# 3. Check status if issues
+gh workflow run sit-environment.yml -f action=status -f environment_name=feature-auth
+
+# 4. Cleanup when done
+gh workflow run sit-environment.yml -f action=teardown -f environment_name=feature-auth
+```
+
+### Finding Your Environment
+```bash
+# List all to see what's running
+gh workflow run sit-environment.yml -f action=list-all -f environment_name=dummy
+
+# Check your specific environment
+gh workflow run sit-environment.yml -f action=status -f environment_name=YOUR-NAME
 ```
 
 ## Service Endpoints
