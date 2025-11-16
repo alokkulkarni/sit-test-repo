@@ -13,7 +13,7 @@ services:
       - "${BENEFICIARIES_DB_PORT:-5432}:5432"
     volumes:
       - beneficiaries-db-data:/var/lib/postgresql/data
-      - ./beneficiaries/src/test/resources/init.db:/docker-entrypoint-initdb.d/init.sql
+      - ./beneficiaries/init.db:/docker-entrypoint-initdb.d/init.sql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d beneficiaries"]
       interval: 10s
@@ -34,7 +34,7 @@ services:
       - "${PAYMENTPROCESSOR_DB_PORT:-5433}:5432"
     volumes:
       - paymentprocessor-db-data:/var/lib/postgresql/data
-      - ./paymentprocessor/src/test/resources/init.sql:/docker-entrypoint-initdb.d/init.sql
+      - ./paymentprocessor/init.sql:/docker-entrypoint-initdb.d/init.sql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d paymentprocessor"]
       interval: 10s

@@ -1,0 +1,63 @@
+-- Schema for beneficiaries table (plural to match Spring Data JDBC table name)
+CREATE TABLE IF NOT EXISTS beneficiaries (
+    id BIGSERIAL PRIMARY KEY,
+    customer_id VARCHAR(255) NOT NULL,
+    account_number VARCHAR(255),
+    beneficiary_name VARCHAR(255) NOT NULL,
+    beneficiary_account_number VARCHAR(255) NOT NULL,
+    beneficiary_bank_code VARCHAR(255) NOT NULL,
+    beneficiary_bank_name VARCHAR(255) NOT NULL,
+    beneficiary_type VARCHAR(50) NOT NULL,
+    status VARCHAR(50) DEFAULT 'ACTIVE',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT unique_customer_beneficiary_account UNIQUE (customer_id, beneficiary_account_number, status)
+);
+
+-- Indexes for performance
+CREATE INDEX IF NOT EXISTS idx_customer_id ON beneficiaries(customer_id);
+CREATE INDEX IF NOT EXISTS idx_account_number ON beneficiaries(account_number);
+CREATE INDEX IF NOT EXISTS idx_status ON beneficiaries(status);
+
+-- Test data for BDD scenarios
+-- Data for update/retrieve scenarios (ID 1, CUST001) - NEVER deleted
+INSERT INTO beneficiaries (id, customer_id, account_number, beneficiary_name, beneficiary_account_number, beneficiary_bank_code, beneficiary_bank_name, beneficiary_type, status, created_at, updated_at)
+VALUES 
+(1, 'CUST001', 'ACC001', 'Old Name', 'BEN001', 'BANK001', 'Old Bank', 'DOMESTIC', 'ACTIVE', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
+
+-- Data for delete scenarios (IDs 2, 3, 4 - different customers to avoid conflicts with other scenarios)
+INSERT INTO beneficiaries (id, customer_id, account_number, beneficiary_name, beneficiary_account_number, beneficiary_bank_code, beneficiary_bank_name, beneficiary_type, status, created_at, updated_at)
+VALUES 
+(2, 'CUST006', 'ACC006', 'Jane Smith', 'BEN002', 'BANK002', 'Test Bank 2', 'DOMESTIC', 'ACTIVE', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+(3, 'CUST007', 'ACC007', 'Bob Johnson', 'BEN003', 'BANK003', 'Test Bank 3', 'DOMESTIC', 'ACTIVE', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+(4, 'CUST003', 'ACC003', 'Deleted User', 'BEN004', 'BANK004', 'Test Bank 4', 'DOMESTIC', 'ACTIVE', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
+
+-- Data for duplicate check (ID 5, CUST003 - conflicts with BEN003 above)
+INSERT INTO beneficiaries (id, customer_id, account_number, beneficiary_name, beneficiary_account_number, beneficiary_bank_code, beneficiary_bank_name, beneficiary_type, status, created_at, updated_at)
+VALUES 
+(5, 'CUST003', 'ACC003', 'Existing User', 'BEN003', 'BANK004', 'Test Bank 4', 'DOMESTIC', 'ACTIVE', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
+
+-- Data for retrieve all beneficiaries for a customer (CUST002 has multiple)
+INSERT INTO beneficiaries (id, customer_id, account_number, beneficiary_name, beneficiary_account_number, beneficiary_bank_code, beneficiary_bank_name, beneficiary_type, status, created_at, updated_at)
+VALUES 
+(10, 'CUST002', 'ACC010', 'Beneficiary One', 'BEN010', 'BANK006', 'Test Bank 6', 'DOMESTIC', 'ACTIVE', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+(11, 'CUST002', 'ACC011', 'Beneficiary Two', 'BEN011', 'BANK006', 'Test Bank 6', 'INTERNATIONAL', 'ACTIVE', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+(12, 'CUST002', 'ACC012', 'Beneficiary Three', 'BEN012', 'BANK006', 'Test Bank 6', 'DOMESTIC', 'ACTIVE', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
+
+-- Data for retrieve by customer and account number (CUST003)
+INSERT INTO beneficiaries (id, customer_id, account_number, beneficiary_name, beneficiary_account_number, beneficiary_bank_code, beneficiary_bank_name, beneficiary_type, status, created_at, updated_at)
+VALUES 
+(20, 'CUST003', 'ACC_A', 'Account A User', 'BEN020', 'BANK007', 'Test Bank 7', 'DOMESTIC', 'ACTIVE', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+(21, 'CUST003', 'ACC_B', 'Account B User', 'BEN021', 'BANK007', 'Test Bank 7', 'INTERNATIONAL', 'ACTIVE', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+(22, 'CUST003', 'ACC_A', 'Another A User', 'BEN022', 'BANK007', 'Test Bank 7', 'DOMESTIC', 'ACTIVE', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
+
+-- Data for null/empty account number scenarios (CUST004 and CUST005)
+INSERT INTO beneficiaries (id, customer_id, account_number, beneficiary_name, beneficiary_account_number, beneficiary_bank_code, beneficiary_bank_name, beneficiary_type, status, created_at, updated_at)
+VALUES 
+(30, 'CUST004', 'ACC030', 'User One', 'BEN030', 'BANK008', 'Test Bank 8', 'DOMESTIC', 'ACTIVE', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+(31, 'CUST004', 'ACC031', 'User Two', 'BEN031', 'BANK008', 'Test Bank 8', 'INTERNATIONAL', 'ACTIVE', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+(40, 'CUST005', 'ACC040', 'User Alpha', 'BEN040', 'BANK009', 'Test Bank 9', 'DOMESTIC', 'ACTIVE', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+(41, 'CUST005', 'ACC041', 'User Beta', 'BEN041', 'BANK009', 'Test Bank 9', 'INTERNATIONAL', 'ACTIVE', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
+
+-- Reset sequence to avoid conflicts with test data
+SELECT setval('beneficiaries_id_seq', 100, true);
