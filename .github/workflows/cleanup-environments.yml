@@ -1,0 +1,294 @@
+name: Cleanup SIT Environments
+
+# Automatically cleanup environments running beyond 6 PM or longer than 6 hours
+
+on:
+  schedule:
+    # Run every hour
+    - cron: '0 * * * *'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run (show what would be cleaned up without actually doing it)'
+        required: false
+        type: boolean
+        default: true
+      force_cleanup:
+        description: 'Force cleanup regardless of time/duration checks'
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  cleanup-environments:
+    runs-on: [self-hosted, macOS]
+    timeout-minutes: 30
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set cleanup parameters
+        run: |
+          CURRENT_HOUR=$(date +%H)
+          CURRENT_TIME=$(date +%s)
+          CUTOFF_TIME_6PM=18
+          MAX_RUNTIME_HOURS=6
+          MAX_RUNTIME_SECONDS=$((MAX_RUNTIME_HOURS * 3600))
+          
+          echo "CURRENT_HOUR=${CURRENT_HOUR}" >> $GITHUB_ENV
+          echo "CURRENT_TIME=${CURRENT_TIME}" >> $GITHUB_ENV
+          echo "CUTOFF_TIME_6PM=${CUTOFF_TIME_6PM}" >> $GITHUB_ENV
+          echo "MAX_RUNTIME_SECONDS=${MAX_RUNTIME_SECONDS}" >> $GITHUB_ENV
+          echo "DRY_RUN=${{ github.event.inputs.dry_run || 'true' }}" >> $GITHUB_ENV
+          echo "FORCE_CLEANUP=${{ github.event.inputs.force_cleanup || 'false' }}" >> $GITHUB_ENV
+          
+          echo "📅 Current time: $(date)"
+          echo "🕐 Current hour: ${CURRENT_HOUR}"
+          echo "⏱️  Max runtime: ${MAX_RUNTIME_HOURS} hours"
+          echo "🔍 Dry run: ${{ github.event.inputs.dry_run || 'true' }}"
+          echo "⚡ Force cleanup: ${{ github.event.inputs.force_cleanup || 'false' }}"
+
+      - name: Verify Docker is running
+        run: |
+          if ! docker info > /dev/null 2>&1; then
+            echo "Error: Docker is not running"
+            exit 1
+          fi
+          echo "✅ Docker is running"
+
+      - name: Discover SIT environments
+        id: discover
+        run: |
+          echo "🔍 Discovering active SIT environments..."
+          echo ""
+          
+          # Get all SIT containers with their creation time
+          CONTAINERS=$(docker ps --filter "name=sit-" --format "{{.Names}}\t{{.CreatedAt}}\t{{.Status}}" | sort)
+          
+          if [ -z "$CONTAINERS" ]; then
+            echo "ℹ️  No active SIT environments found"
+            echo "environments_found=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          echo "environments_found=true" >> $GITHUB_OUTPUT
+          echo "📋 Active SIT Containers:"
+          echo "$CONTAINERS" | while IFS=$'\t' read -r name created status; do
+            echo "  - $name (Created: $created, Status: $status)"
+          done
+          echo ""
+          
+          # Extract unique environment names (compose projects)
+          COMPOSE_PROJECTS=$(docker ps --filter "name=sit-" --format "{{.Label \"com.docker.compose.project\"}}" | sort -u | grep -v '^$')
+          
+          if [ -z "$COMPOSE_PROJECTS" ]; then
+            echo "⚠️  No compose projects found"
+            exit 0
+          fi
+          
+          echo "📦 Active Compose Projects:"
+          echo "$COMPOSE_PROJECTS" | while read -r project; do
+            echo "  - $project"
+          done
+
+      - name: Analyze and cleanup environments
+        if: steps.discover.outputs.environments_found == 'true'
+        run: |
+          echo "🔎 Analyzing environments for cleanup..."
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo ""
+          
+          CLEANUP_COUNT=0
+          SKIP_COUNT=0
+          
+          # Get unique compose projects
+          COMPOSE_PROJECTS=$(docker ps --filter "name=sit-" --format "{{.Label \"com.docker.compose.project\"}}" | sort -u | grep -v '^$')
+          
+          for PROJECT in $COMPOSE_PROJECTS; do
+            if [ -z "$PROJECT" ]; then
+              continue
+            fi
+            
+            echo "🔍 Checking environment: $PROJECT"
+            
+            # Get the oldest container creation time for this project
+            OLDEST_CONTAINER=$(docker ps --filter "label=com.docker.compose.project=$PROJECT" --format "{{.CreatedAt}}" | sort | head -1)
+            
+            if [ -z "$OLDEST_CONTAINER" ]; then
+              echo "  ⚠️  No containers found for project"
+              continue
+            fi
+            
+            # Parse creation timestamp
+            CREATED_TIMESTAMP=$(date -j -f "%Y-%m-%d %H:%M:%S" "$OLDEST_CONTAINER" +%s 2>/dev/null || echo "0")
+            
+            if [ "$CREATED_TIMESTAMP" = "0" ]; then
+              echo "  ⚠️  Could not parse creation time: $OLDEST_CONTAINER"
+              SKIP_COUNT=$((SKIP_COUNT + 1))
+              continue
+            fi
+            
+            # Calculate runtime
+            RUNTIME_SECONDS=$((CURRENT_TIME - CREATED_TIMESTAMP))
+            RUNTIME_HOURS=$((RUNTIME_SECONDS / 3600))
+            RUNTIME_MINUTES=$(((RUNTIME_SECONDS % 3600) / 60))
+            
+            echo "  📅 Created: $OLDEST_CONTAINER"
+            echo "  ⏱️  Runtime: ${RUNTIME_HOURS}h ${RUNTIME_MINUTES}m"
+            
+            # Determine if cleanup is needed
+            SHOULD_CLEANUP=false
+            CLEANUP_REASON=""
+            
+            if [ "$FORCE_CLEANUP" = "true" ]; then
+              SHOULD_CLEANUP=true
+              CLEANUP_REASON="Force cleanup requested"
+            elif [ "$CURRENT_HOUR" -ge "$CUTOFF_TIME_6PM" ]; then
+              SHOULD_CLEANUP=true
+              CLEANUP_REASON="After 6 PM (current hour: ${CURRENT_HOUR})"
+            elif [ "$RUNTIME_SECONDS" -gt "$MAX_RUNTIME_SECONDS" ]; then
+              SHOULD_CLEANUP=true
+              CLEANUP_REASON="Exceeded max runtime of ${MAX_RUNTIME_HOURS} hours"
+            fi
+            
+            if [ "$SHOULD_CLEANUP" = "true" ]; then
+              echo "  🚨 CLEANUP NEEDED: $CLEANUP_REASON"
+              
+              if [ "$DRY_RUN" = "true" ]; then
+                echo "  🔍 DRY RUN: Would teardown environment $PROJECT"
+                echo ""
+                CLEANUP_COUNT=$((CLEANUP_COUNT + 1))
+              else
+                echo "  🧹 Tearing down environment $PROJECT..."
+                
+                # Set COMPOSE_PROJECT_NAME and teardown
+                export COMPOSE_PROJECT_NAME="$PROJECT"
+                
+                # Show what will be removed
+                echo "  📋 Containers to remove:"
+                docker compose ps -a
+                
+                # Perform teardown
+                docker compose down
+                
+                if [ $? -eq 0 ]; then
+                  echo "  ✅ Successfully removed environment $PROJECT"
+                  CLEANUP_COUNT=$((CLEANUP_COUNT + 1))
+                else
+                  echo "  ❌ Failed to remove environment $PROJECT"
+                fi
+                echo ""
+              fi
+            else
+              echo "  ✅ Environment is OK (runtime: ${RUNTIME_HOURS}h ${RUNTIME_MINUTES}m, hour: ${CURRENT_HOUR})"
+              echo ""
+              SKIP_COUNT=$((SKIP_COUNT + 1))
+            fi
+          done
+          
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "📊 Cleanup Summary:"
+          echo "  - Environments processed: $((CLEANUP_COUNT + SKIP_COUNT))"
+          echo "  - Cleaned up: $CLEANUP_COUNT"
+          echo "  - Kept running: $SKIP_COUNT"
+          
+          if [ "$DRY_RUN" = "true" ]; then
+            echo ""
+            echo "🔍 DRY RUN MODE - No actual changes made"
+            echo "💡 Run with dry_run=false to perform actual cleanup"
+          fi
+          
+          # Set outputs for summary
+          echo "cleanup_count=$CLEANUP_COUNT" >> $GITHUB_ENV
+          echo "skip_count=$SKIP_COUNT" >> $GITHUB_ENV
+
+      - name: Post-cleanup status
+        if: steps.discover.outputs.environments_found == 'true'
+        run: |
+          echo ""
+          echo "🔍 Remaining SIT environments after cleanup:"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          
+          REMAINING=$(docker ps --filter "name=sit-" --format "table {{.Names}}\t{{.Status}}\t{{.CreatedAt}}")
+          
+          if [ -z "$REMAINING" ]; then
+            echo "✅ No SIT environments running"
+          else
+            echo "$REMAINING"
+          fi
+
+      - name: Send cleanup notification
+        if: steps.discover.outputs.environments_found == 'true'
+        run: |
+          if [ "$DRY_RUN" = "false" ] && [ "${cleanup_count:-0}" != "0" ]; then
+            echo "📧 Cleanup notification:"
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo "Cleaned up ${cleanup_count} SIT environment(s)"
+            echo "Time: $(date)"
+            echo "Reason: After 6 PM or exceeded 6 hour runtime"
+            echo ""
+            echo "💡 Tip: To keep environments running longer, redeploy with a fresh environment name"
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            
+            # TODO: Add Slack/email notification here if needed
+            # Example: curl -X POST -H 'Content-type: application/json' \
+            #   --data "{\"text\":\"Cleaned up ${cleanup_count} SIT environments\"}" \
+            #   $SLACK_WEBHOOK_URL
+          fi
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "## SIT Environment Cleanup Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Run Time:** $(date)" >> $GITHUB_STEP_SUMMARY
+          echo "**Current Hour:** ${CURRENT_HOUR}" >> $GITHUB_STEP_SUMMARY
+          echo "**Dry Run:** ${DRY_RUN}" >> $GITHUB_STEP_SUMMARY
+          echo "**Force Cleanup:** ${FORCE_CLEANUP}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [ "${{ steps.discover.outputs.environments_found }}" = "true" ]; then
+            echo "### 📊 Results" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "| Metric | Count |" >> $GITHUB_STEP_SUMMARY
+            echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+            echo "| Environments Cleaned | ${cleanup_count:-0} |" >> $GITHUB_STEP_SUMMARY
+            echo "| Environments Kept | ${skip_count:-0} |" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            
+            if [ "$DRY_RUN" = "true" ]; then
+              echo "⚠️ **DRY RUN MODE** - No actual changes were made" >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+              echo "To perform actual cleanup, run with \`dry_run=false\`" >> $GITHUB_STEP_SUMMARY
+            fi
+          else
+            echo "ℹ️ No SIT environments found" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "---" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 📝 Cleanup Rules" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Environments are cleaned up if:" >> $GITHUB_STEP_SUMMARY
+          echo "- Current time is **after 6 PM** (18:00), OR" >> $GITHUB_STEP_SUMMARY
+          echo "- Environment has been running for **more than 6 hours**" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 🔄 Schedule" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Automatic:** Runs every hour via cron schedule" >> $GITHUB_STEP_SUMMARY
+          echo "- **Manual:** Can be triggered via workflow_dispatch" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 💡 Manual Trigger Options" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
+          echo "# Dry run (see what would be cleaned)" >> $GITHUB_STEP_SUMMARY
+          echo "gh workflow run cleanup-environments.yml -f dry_run=true" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "# Actual cleanup" >> $GITHUB_STEP_SUMMARY
+          echo "gh workflow run cleanup-environments.yml -f dry_run=false" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "# Force cleanup all environments (ignores time/duration)" >> $GITHUB_STEP_SUMMARY
+          echo "gh workflow run cleanup-environments.yml -f dry_run=false -f force_cleanup=true" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
