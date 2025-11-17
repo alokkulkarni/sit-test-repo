@@ -127,7 +127,7 @@ services:
 
   # Payment Consumer Application
   paymentconsumer:
-    image: ghcr.io/alokkulkarni/paymentconsumer:latest
+    image: ghcr.io/alokkulkarni/paymentconsumer/paymentconsumer:latest
     container_name: paymentconsumer-app
     environment:
       # Server Configuration
