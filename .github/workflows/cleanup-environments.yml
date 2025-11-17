@@ -21,7 +21,7 @@ on:
 
 jobs:
   cleanup-environments:
-    runs-on: [self-hosted, macOS]
+    runs-on: [self-hosted, macOS, sit-env-create]
     timeout-minutes: 30
     
     steps:
@@ -63,34 +63,25 @@ jobs:
           echo "🔍 Discovering active SIT environments..."
           echo ""
           
-          # Get all SIT containers with their creation time
-          CONTAINERS=$(docker ps --filter "name=sit-" --format "{{.Names}}\t{{.CreatedAt}}\t{{.Status}}" | sort)
+          # Get all containers with sit- compose project label
+          COMPOSE_PROJECTS=$(docker ps -a --format "{{.Label \"com.docker.compose.project\"}}" | grep "^sit-" | sort -u)
           
-          if [ -z "$CONTAINERS" ]; then
+          if [ -z "$COMPOSE_PROJECTS" ]; then
             echo "ℹ️  No active SIT environments found"
             echo "environments_found=false" >> $GITHUB_OUTPUT
             exit 0
           fi
           
           echo "environments_found=true" >> $GITHUB_OUTPUT
-          echo "📋 Active SIT Containers:"
-          echo "$CONTAINERS" | while IFS=$'\t' read -r name created status; do
-            echo "  - $name (Created: $created, Status: $status)"
-          done
-          echo ""
-          
-          # Extract unique environment names (compose projects)
-          COMPOSE_PROJECTS=$(docker ps --filter "name=sit-" --format "{{.Label \"com.docker.compose.project\"}}" | sort -u | grep -v '^$')
-          
-          if [ -z "$COMPOSE_PROJECTS" ]; then
-            echo "⚠️  No compose projects found"
-            exit 0
-          fi
-          
           echo "📦 Active Compose Projects:"
           echo "$COMPOSE_PROJECTS" | while read -r project; do
             echo "  - $project"
+            
+            # Show containers for this project
+            echo "    Containers:"
+            docker ps --filter "label=com.docker.compose.project=$project" --format "      - {{.Names}} ({{.Status}})"
           done
+          echo ""
 
       - name: Analyze and cleanup environments
         if: steps.discover.outputs.environments_found == 'true'
@@ -102,8 +93,8 @@ jobs:
           CLEANUP_COUNT=0
           SKIP_COUNT=0
           
-          # Get unique compose projects
-          COMPOSE_PROJECTS=$(docker ps --filter "name=sit-" --format "{{.Label \"com.docker.compose.project\"}}" | sort -u | grep -v '^$')
+          # Get unique compose projects with sit- prefix
+          COMPOSE_PROJECTS=$(docker ps -a --format "{{.Label \"com.docker.compose.project\"}}" | grep "^sit-" | sort -u)
           
           for PROJECT in $COMPOSE_PROJECTS; do
             if [ -z "$PROJECT" ]; then
@@ -120,8 +111,8 @@ jobs:
               continue
             fi
             
-            # Parse creation timestamp
-            CREATED_TIMESTAMP=$(date -j -f "%Y-%m-%d %H:%M:%S" "$OLDEST_CONTAINER" +%s 2>/dev/null || echo "0")
+            # Parse creation timestamp (handle both formats)
+            CREATED_TIMESTAMP=$(date -j -f "%Y-%m-%d %H:%M:%S %z %Z" "$OLDEST_CONTAINER" +%s 2>/dev/null || date -j -f "%Y-%m-%d %H:%M:%S" "${OLDEST_CONTAINER%% *}" +%s 2>/dev/null || echo "0")
             
             if [ "$CREATED_TIMESTAMP" = "0" ]; then
               echo "  ⚠️  Could not parse creation time: $OLDEST_CONTAINER"
@@ -157,22 +148,37 @@ jobs:
               
               if [ "$DRY_RUN" = "true" ]; then
                 echo "  🔍 DRY RUN: Would teardown environment $PROJECT"
+                echo "  📋 Containers that would be removed:"
+                docker ps -a --filter "label=com.docker.compose.project=$PROJECT" --format "      - {{.Names}} ({{.Status}})"
                 echo ""
                 CLEANUP_COUNT=$((CLEANUP_COUNT + 1))
               else
                 echo "  🧹 Tearing down environment $PROJECT..."
                 
-                # Set COMPOSE_PROJECT_NAME and teardown
-                export COMPOSE_PROJECT_NAME="$PROJECT"
+                # Get the working directory from one of the containers
+                WORKING_DIR=$(docker inspect $(docker ps -a --filter "label=com.docker.compose.project=$PROJECT" --format "{{.ID}}" | head -1) | jq -r '.[0].Config.Labels["com.docker.compose.project.working_dir"]')
+                COMPOSE_FILE=$(docker inspect $(docker ps -a --filter "label=com.docker.compose.project=$PROJECT" --format "{{.ID}}" | head -1) | jq -r '.[0].Config.Labels["com.docker.compose.project.config_files"]')
+                
+                echo "  📂 Working Dir: $WORKING_DIR"
+                echo "  📄 Compose File: $COMPOSE_FILE"
                 
                 # Show what will be removed
                 echo "  📋 Containers to remove:"
-                docker compose ps -a
+                docker ps -a --filter "label=com.docker.compose.project=$PROJECT" --format "      - {{.Names}} ({{.Status}})"
                 
-                # Perform teardown
-                docker compose down
+                # Perform teardown using docker compose with explicit project name
+                if [ -f "$COMPOSE_FILE" ] && [ -d "$WORKING_DIR" ]; then
+                  cd "$WORKING_DIR"
+                  docker compose -f "$COMPOSE_FILE" -p "$PROJECT" down --volumes --remove-orphans
+                  RESULT=$?
+                else
+                  # Fallback: stop and remove containers manually
+                  echo "  ⚠️  Compose file not found, removing containers manually..."
+                  docker ps -a --filter "label=com.docker.compose.project=$PROJECT" --format "{{.ID}}" | xargs -r docker rm -f
+                  RESULT=$?
+                fi
                 
-                if [ $? -eq 0 ]; then
+                if [ $RESULT -eq 0 ]; then
                   echo "  ✅ Successfully removed environment $PROJECT"
                   CLEANUP_COUNT=$((CLEANUP_COUNT + 1))
                 else
