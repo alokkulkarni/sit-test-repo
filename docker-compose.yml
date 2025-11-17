@@ -137,6 +137,7 @@ services:
       PAYMENT_PROCESSOR_SERVICE_URL: http://paymentprocessor:8081
       # Spring Boot Configuration
       SPRING_APPLICATION_NAME: paymentConsumer
+      SPRING_AUTOCONFIGURE_EXCLUDE: org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration,org.springframework.boot.autoconfigure.jdbc.DataSourceTransactionManagerAutoConfiguration
       # Logging configuration
       HEALTH_DETAILS: always
       LOG_LEVEL_ROOT: INFO

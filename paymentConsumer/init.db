@@ -1,0 +1,55 @@
+-- Schema for accounts table (in-memory data for testing PaymentConsumer)
+CREATE TABLE IF NOT EXISTS accounts (
+    id BIGSERIAL PRIMARY KEY,
+    customer_id VARCHAR(255) NOT NULL UNIQUE,
+    account_number VARCHAR(255) NOT NULL UNIQUE,
+    account_type VARCHAR(50) NOT NULL,
+    balance DECIMAL(19, 2) NOT NULL,
+    currency VARCHAR(3) NOT NULL DEFAULT 'USD',
+    status VARCHAR(50) NOT NULL DEFAULT 'ACTIVE',
+    customer_name VARCHAR(255),
+    email VARCHAR(255),
+    phone_number VARCHAR(50),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Indexes for performance
+CREATE INDEX IF NOT EXISTS idx_customer_id ON accounts(customer_id);
+CREATE INDEX IF NOT EXISTS idx_account_number ON accounts(account_number);
+CREATE INDEX IF NOT EXISTS idx_status ON accounts(status);
+
+-- Test data for integration and BDD scenarios
+-- Accounts with sufficient balance for payment testing
+INSERT INTO accounts (id, customer_id, account_number, account_type, balance, currency, status, customer_name, email, phone_number, created_at, updated_at)
+VALUES 
+-- Customer with SAVINGS account and good balance
+(1, 'CUST001', 'ACC001', 'SAVINGS', 10000.00, 'USD', 'ACTIVE', 'John Doe', 'john.doe@example.com', '+1-555-0101', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+
+-- Customer with CURRENT account and high balance
+(2, 'CUST002', 'ACC002', 'CURRENT', 25000.00, 'USD', 'ACTIVE', 'Jane Smith', 'jane.smith@example.com', '+1-555-0102', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+
+-- Customer with SAVINGS account and moderate balance
+(3, 'CUST003', 'ACC003', 'SAVINGS', 5000.00, 'USD', 'ACTIVE', 'Bob Johnson', 'bob.johnson@example.com', '+1-555-0103', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+
+-- Customer with low balance for insufficient balance testing
+(4, 'CUST004', 'ACC004', 'SAVINGS', 500.00, 'USD', 'ACTIVE', 'Alice Brown', 'alice.brown@example.com', '+1-555-0104', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+
+-- Customer with CURRENT account for transaction testing
+(5, 'CUST005', 'ACC005', 'CURRENT', 15000.00, 'USD', 'ACTIVE', 'Charlie Davis', 'charlie.davis@example.com', '+1-555-0105', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+
+-- Additional customers for various test scenarios
+(6, 'CUST006', 'ACC006', 'SAVINGS', 8000.00, 'USD', 'ACTIVE', 'Diana Evans', 'diana.evans@example.com', '+1-555-0106', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+
+(7, 'CUST007', 'ACC007', 'CURRENT', 12000.00, 'USD', 'ACTIVE', 'Edward Foster', 'edward.foster@example.com', '+1-555-0107', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+
+(8, 'CUST008', 'ACC008', 'SAVINGS', 20000.00, 'USD', 'ACTIVE', 'Fiona Green', 'fiona.green@example.com', '+1-555-0108', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+
+-- Inactive account for negative testing
+(9, 'CUST009', 'ACC009', 'SAVINGS', 3000.00, 'USD', 'INACTIVE', 'George Harris', 'george.harris@example.com', '+1-555-0109', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+
+-- Additional accounts for BDD scenarios
+(10, 'CUST010', 'ACC010', 'CURRENT', 18000.00, 'USD', 'ACTIVE', 'Helen Irving', 'helen.irving@example.com', '+1-555-0110', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
+
+-- Reset sequence to avoid conflicts with test data
+SELECT setval('accounts_id_seq', 100, true);
