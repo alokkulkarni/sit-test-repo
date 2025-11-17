@@ -19,11 +19,38 @@ CREATE INDEX IF NOT EXISTS idx_customer_id ON beneficiaries(customer_id);
 CREATE INDEX IF NOT EXISTS idx_account_number ON beneficiaries(account_number);
 CREATE INDEX IF NOT EXISTS idx_status ON beneficiaries(status);
 
--- Test data for BDD scenarios
--- Data for update/retrieve scenarios (ID 1, CUST001) - NEVER deleted
+-- Demo Data for Payment Consumer Service Integration
+-- These match the demo accounts in AccountService:
+-- CUST001 (John Doe) - ACC001 - SAVINGS - $10,000
+-- CUST002 (Jane Smith) - ACC002 - CHECKING - $5,000
+-- CUST003 (Bob Johnson) - ACC003 - SAVINGS - $15,000
+
+-- Beneficiaries for CUST001 (John Doe)
 INSERT INTO beneficiaries (id, customer_id, account_number, beneficiary_name, beneficiary_account_number, beneficiary_bank_code, beneficiary_bank_name, beneficiary_type, status, created_at, updated_at)
 VALUES 
-(1, 'CUST001', 'ACC001', 'Old Name', 'BEN001', 'BANK001', 'Old Bank', 'DOMESTIC', 'ACTIVE', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
+(1, 'CUST001', 'ACC001', 'Jane Smith', 'ACC002', 'BANK001', 'First National Bank', 'DOMESTIC', 'ACTIVE', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+(50, 'CUST001', 'ACC001', 'Bob Johnson', 'ACC003', 'BANK001', 'First National Bank', 'DOMESTIC', 'ACTIVE', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+(51, 'CUST001', 'ACC001', 'External Vendor', 'VENDOR001', 'BANK002', 'Second National Bank', 'INTERNATIONAL', 'ACTIVE', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
+
+-- Beneficiaries for CUST002 (Jane Smith)
+INSERT INTO beneficiaries (id, customer_id, account_number, beneficiary_name, beneficiary_account_number, beneficiary_bank_code, beneficiary_bank_name, beneficiary_type, status, created_at, updated_at)
+VALUES 
+(52, 'CUST002', 'ACC002', 'John Doe', 'ACC001', 'BANK001', 'First National Bank', 'DOMESTIC', 'ACTIVE', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+(53, 'CUST002', 'ACC002', 'Bob Johnson', 'ACC003', 'BANK001', 'First National Bank', 'DOMESTIC', 'ACTIVE', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+(54, 'CUST002', 'ACC002', 'Utility Company', 'UTIL001', 'BANK003', 'Third National Bank', 'DOMESTIC', 'ACTIVE', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
+
+-- Beneficiaries for CUST003 (Bob Johnson)
+INSERT INTO beneficiaries (id, customer_id, account_number, beneficiary_name, beneficiary_account_number, beneficiary_bank_code, beneficiary_bank_name, beneficiary_type, status, created_at, updated_at)
+VALUES 
+(55, 'CUST003', 'ACC003', 'John Doe', 'ACC001', 'BANK001', 'First National Bank', 'DOMESTIC', 'ACTIVE', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+(56, 'CUST003', 'ACC003', 'Jane Smith', 'ACC002', 'BANK001', 'First National Bank', 'DOMESTIC', 'ACTIVE', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+(57, 'CUST003', 'ACC003', 'Insurance Company', 'INS001', 'BANK004', 'Fourth National Bank', 'DOMESTIC', 'ACTIVE', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
+
+-- Test data for BDD scenarios
+-- Data for update/retrieve scenarios (ID 60, CUST001) - NEVER deleted
+INSERT INTO beneficiaries (id, customer_id, account_number, beneficiary_name, beneficiary_account_number, beneficiary_bank_code, beneficiary_bank_name, beneficiary_type, status, created_at, updated_at)
+VALUES 
+(60, 'CUST001', 'ACC001', 'Old Name', 'BEN001', 'BANK001', 'Old Bank', 'DOMESTIC', 'ACTIVE', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
 
 -- Data for delete scenarios (IDs 2, 3, 4 - different customers to avoid conflicts with other scenarios)
 INSERT INTO beneficiaries (id, customer_id, account_number, beneficiary_name, beneficiary_account_number, beneficiary_bank_code, beneficiary_bank_name, beneficiary_type, status, created_at, updated_at)
@@ -60,4 +87,4 @@ VALUES
 (41, 'CUST005', 'ACC041', 'User Beta', 'BEN041', 'BANK009', 'Test Bank 9', 'INTERNATIONAL', 'ACTIVE', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
 
 -- Reset sequence to avoid conflicts with test data
-SELECT setval('beneficiaries_id_seq', 100, true);
+SELECT setval('beneficiaries_id_seq', 200, true);

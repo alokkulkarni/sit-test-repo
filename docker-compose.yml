@@ -126,28 +126,45 @@ services:
     restart: unless-stopped
 
   # Payment Consumer Application
-  # paymentconsumer:
-  #   build:
-  #     context: ../paymentConsumer
-  #     dockerfile: Dockerfile
-  #   container_name: paymentconsumer-app
-  #   environment:
-  #     SERVER_PORT: 8082
-  #     HEALTH_DETAILS: always
-  #     LOG_LEVEL_ROOT: INFO
-  #     LOG_LEVEL_APP: INFO
-  #     TIMEZONE: UTC
-  #   ports:
-  #     - "${PAYMENTCONSUMER_PORT:-8082}:8082"
-  #   healthcheck:
-  #     test: ["CMD", "curl", "-f", "http://localhost:8082/actuator/health"]
-  #     interval: 30s
-  #     timeout: 10s
-  #     retries: 3
-  #     start_period: 40s
-  #   networks:
-  #     - payment-network
-  #   restart: unless-stopped
+  paymentconsumer:
+    image: ghcr.io/alokkulkarni/paymentconsumer:latest
+    container_name: paymentconsumer-app
+    environment:
+      # Server Configuration
+      SERVER_PORT: 8082
+      # External service connection strings
+      BENEFICIARIES_SERVICE_URL: http://beneficiaries:8080
+      PAYMENT_PROCESSOR_SERVICE_URL: http://paymentprocessor:8081
+      # Spring Boot Configuration
+      SPRING_APPLICATION_NAME: paymentConsumer
+      # Logging configuration
+      HEALTH_DETAILS: always
+      LOG_LEVEL_ROOT: INFO
+      LOG_LEVEL_APP: INFO
+      LOG_LEVEL_SPRING_WEB: INFO
+      TIMEZONE: UTC
+      # Actuator endpoints
+      ACTUATOR_ENDPOINTS: health,info,metrics,prometheus
+      PROMETHEUS_ENABLED: true
+      # Resilience4j Circuit Breaker (optional overrides)
+      # RESILIENCE4J_CIRCUITBREAKER_CONFIGS_DEFAULT_SLIDINGWINDOWSIZE: 10
+      # RESILIENCE4J_CIRCUITBREAKER_CONFIGS_DEFAULT_FAILURERATETHRESHOLD: 50
+    ports:
+      - "${PAYMENTCONSUMER_PORT:-8082}:8082"
+    depends_on:
+      beneficiaries:
+        condition: service_healthy
+      paymentprocessor:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8082/actuator/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - payment-network
+    restart: unless-stopped
 
 networks:
   payment-network:

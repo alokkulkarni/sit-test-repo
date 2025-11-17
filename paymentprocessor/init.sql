@@ -27,6 +27,22 @@ CREATE INDEX idx_payments_to_account ON payments(to_account);
 CREATE INDEX idx_payments_status ON payments(status);
 CREATE INDEX idx_payments_created_at ON payments(created_at);
 
+-- Demo Data for Payment Consumer Service Integration
+-- These match the demo accounts in AccountService:
+-- CUST001 (John Doe) - ACC001 - SAVINGS - $10,000
+-- CUST002 (Jane Smith) - ACC002 - CHECKING - $5,000
+-- CUST003 (Bob Johnson) - ACC003 - SAVINGS - $15,000
+
+-- Demo completed payments between demo accounts
+INSERT INTO payments (transaction_id, from_account, to_account, amount, currency, payment_type, status, description, created_at, updated_at)
+VALUES 
+    ('DEMO-TXN-001', 'ACC001', 'ACC002', 500.00, 'USD', 'INTRABANK_TRANSFER', 'COMPLETED', 'Transfer from John Doe to Jane Smith', CURRENT_TIMESTAMP - INTERVAL '2 days', CURRENT_TIMESTAMP - INTERVAL '2 days'),
+    ('DEMO-TXN-002', 'ACC002', 'ACC003', 250.00, 'USD', 'INTRABANK_TRANSFER', 'COMPLETED', 'Transfer from Jane Smith to Bob Johnson', CURRENT_TIMESTAMP - INTERVAL '1 day', CURRENT_TIMESTAMP - INTERVAL '1 day'),
+    ('DEMO-TXN-003', 'ACC003', 'ACC001', 750.00, 'USD', 'INTRABANK_TRANSFER', 'COMPLETED', 'Transfer from Bob Johnson to John Doe', CURRENT_TIMESTAMP - INTERVAL '12 hours', CURRENT_TIMESTAMP - INTERVAL '12 hours'),
+    ('DEMO-TXN-004', 'ACC001', 'VENDOR001', 100.00, 'USD', 'DOMESTIC_PAYMENT', 'COMPLETED', 'Payment to external vendor', CURRENT_TIMESTAMP - INTERVAL '3 hours', CURRENT_TIMESTAMP - INTERVAL '3 hours'),
+    ('DEMO-TXN-005', 'ACC002', 'UTIL001', 150.00, 'USD', 'DOMESTIC_PAYMENT', 'COMPLETED', 'Utility bill payment', CURRENT_TIMESTAMP - INTERVAL '1 hour', CURRENT_TIMESTAMP - INTERVAL '1 hour'),
+    ('DEMO-TXN-006', 'ACC003', 'INS001', 300.00, 'USD', 'DOMESTIC_PAYMENT', 'COMPLETED', 'Insurance premium payment', CURRENT_TIMESTAMP - INTERVAL '30 minutes', CURRENT_TIMESTAMP - INTERVAL '30 minutes');
+
 -- Insert test data for integration and BDD tests
 INSERT INTO payments (transaction_id, from_account, to_account, amount, currency, payment_type, status, description, created_at, updated_at)
 VALUES 
