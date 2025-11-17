@@ -4,8 +4,8 @@ name: Cleanup SIT Environments
 
 on:
   schedule:
-    # Run every hour
-    - cron: '0 * * * *'
+    # Run every 4 hours
+    - cron: '0 */4 * * *'
   workflow_dispatch:
     inputs:
       dry_run:
@@ -277,7 +277,7 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### 🔄 Schedule" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "- **Automatic:** Runs every hour via cron schedule" >> $GITHUB_STEP_SUMMARY
+          echo "- **Automatic:** Runs every 4 hours via cron schedule" >> $GITHUB_STEP_SUMMARY
           echo "- **Manual:** Can be triggered via workflow_dispatch" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### 💡 Manual Trigger Options" >> $GITHUB_STEP_SUMMARY
