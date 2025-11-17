@@ -1,0 +1,2 @@
+CONTAINER             CPU %     MEM USAGE / LIMIT   MEM %
+paymentconsumer-app   0.17%     810MiB / 23.68GiB   3.34%

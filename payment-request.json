@@ -1,0 +1,9 @@
+{
+  "customerId": "CUST001",
+  "fromAccount": "ACC001",
+  "toAccount": "ACC002",
+  "amount": 100.50,
+  "currency": "USD",
+  "paymentType": "DOMESTIC_PAYMENT",
+  "description": "Payment to friend"
+}
