@@ -1,0 +1,506 @@
+name: Generic SIT Environment Management
+
+# This is a GENERIC workflow that can work with ANY docker-compose.yml file
+# It dynamically discovers services and their port mappings from the compose file
+# and automatically calculates unique ports for each environment instance
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'Action to perform'
+        required: true
+        type: choice
+        options:
+          - deploy
+          - stop
+          - teardown
+          - restart
+          - status
+          - list-all
+      environment_name:
+        description: 'Environment name - use your username or unique identifier (e.g., john-dev, alice-test)'
+        required: true
+        type: string
+      compose_file:
+        description: 'Path to docker-compose file (relative to repo root)'
+        required: false
+        type: string
+        default: 'docker-compose.yml'
+
+jobs:
+  manage-sit-environment:
+    runs-on: [self-hosted, macOS, sit-env-create]
+    timeout-minutes: 30
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Validate compose file exists
+        run: |
+          COMPOSE_FILE="${{ github.event.inputs.compose_file }}"
+          if [ ! -f "${COMPOSE_FILE}" ]; then
+            echo "❌ Error: Compose file '${COMPOSE_FILE}' not found!"
+            echo "Available compose files in repository:"
+            find . -name "docker-compose*.yml" -o -name "compose*.yml" 2>/dev/null || echo "No compose files found"
+            exit 1
+          fi
+          echo "✅ Compose file found: ${COMPOSE_FILE}"
+          echo "COMPOSE_FILE_PATH=${COMPOSE_FILE}" >> $GITHUB_ENV
+
+      - name: Set environment variables and calculate ports
+        run: |
+          # Sanitize environment name (remove special chars, lowercase)
+          SANITIZED_NAME=$(echo "${{ github.event.inputs.environment_name }}" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]/-/g')
+          echo "ENVIRONMENT_NAME=${SANITIZED_NAME}" >> $GITHUB_ENV
+          echo "COMPOSE_PROJECT_NAME=sit-${SANITIZED_NAME}" >> $GITHUB_ENV
+          echo "TIMESTAMP=$(date +%Y%m%d-%H%M%S)" >> $GITHUB_ENV
+          
+          # Calculate unique port offset based on environment name hash
+          # This allows multiple environments to run simultaneously without port conflicts
+          HASH=$(echo -n "${SANITIZED_NAME}" | shasum | cut -c1-4)
+          PORT_OFFSET=$((0x${HASH} % 900 + 100))  # Range: 100-999
+          echo "PORT_OFFSET=${PORT_OFFSET}" >> $GITHUB_ENV
+          
+          echo "📍 Environment Configuration:"
+          echo "   Name: ${SANITIZED_NAME}"
+          echo "   Compose File: ${COMPOSE_FILE_PATH}"
+          echo "   Project Name: sit-${SANITIZED_NAME}"
+          echo "   Port Offset: ${PORT_OFFSET}"
+          
+          # Store environment metadata
+          echo "GITHUB_ACTOR=${{ github.actor }}" >> $GITHUB_ENV
+          echo "WORKFLOW_RUN_ID=${{ github.run_id }}" >> $GITHUB_ENV
+
+      - name: Discover and configure service ports
+        run: |
+          COMPOSE_FILE="${COMPOSE_FILE_PATH}"
+          PORT_OFFSET="${PORT_OFFSET}"
+          
+          echo "🔍 Discovering services and ports from ${COMPOSE_FILE}..."
+          echo ""
+          
+          # Extract port mappings from docker-compose file
+          # Format: service_name -> host_port:container_port
+          # We'll look for environment variable patterns like ${VAR:-default}
+          
+          # Create a temporary file to store port mappings
+          PORT_MAPPINGS_FILE=$(mktemp)
+          echo "# Auto-generated port mappings for environment: ${ENVIRONMENT_NAME}" > "${PORT_MAPPINGS_FILE}"
+          
+          # Parse the compose file for port mappings with environment variables
+          # This regex looks for patterns like: ${SERVICE_PORT:-8080}:8080
+          while IFS= read -r line; do
+            # Check if line contains a port mapping with env var
+            if echo "$line" | grep -qE '\$\{[A-Z_]+:-[0-9]+\}:[0-9]+'; then
+              # Extract the environment variable name and default port
+              ENV_VAR=$(echo "$line" | sed -n 's/.*\${\([A-Z_]*\):-\([0-9]*\)}.*/\1/p')
+              DEFAULT_PORT=$(echo "$line" | sed -n 's/.*\${\([A-Z_]*\):-\([0-9]*\)}.*/\2/p')
+              CONTAINER_PORT=$(echo "$line" | sed -n 's/.*}:\([0-9]*\).*/\1/p')
+              
+              if [ -n "$ENV_VAR" ] && [ -n "$DEFAULT_PORT" ]; then
+                # Calculate new port based on offset
+                # Use the default port as base and add offset
+                NEW_PORT=$((DEFAULT_PORT + PORT_OFFSET))
+                
+                # Export to environment
+                echo "${ENV_VAR}=${NEW_PORT}" >> $GITHUB_ENV
+                echo "export ${ENV_VAR}=${NEW_PORT}" >> "${PORT_MAPPINGS_FILE}"
+                
+                # Display mapping
+                echo "   ${ENV_VAR}: ${DEFAULT_PORT} → ${NEW_PORT} (offset: +${PORT_OFFSET})"
+              fi
+            fi
+          done < "${COMPOSE_FILE}"
+          
+          echo ""
+          echo "✅ Port mappings configured and exported to environment"
+          echo "PORT_MAPPINGS_FILE=${PORT_MAPPINGS_FILE}" >> $GITHUB_ENV
+          
+          # Also save for later use
+          cat "${PORT_MAPPINGS_FILE}" > port-mappings.env
+          
+          # Extract service names for health checks
+          echo "🔍 Discovering services..."
+          SERVICES=$(docker-compose -f "${COMPOSE_FILE}" config --services 2>/dev/null || true)
+          echo "DISCOVERED_SERVICES<<EOF" >> $GITHUB_ENV
+          echo "${SERVICES}" >> $GITHUB_ENV
+          echo "EOF" >> $GITHUB_ENV
+          
+          echo "   Detected services: $(echo ${SERVICES} | tr '\n' ', ' | sed 's/,$//')"
+
+      - name: Verify Docker is running
+        run: |
+          if ! docker info > /dev/null 2>&1; then
+            echo "❌ Error: Docker is not running"
+            exit 1
+          fi
+          echo "✅ Docker is running"
+          docker --version
+          docker-compose --version || docker compose version
+
+      - name: List All Environments
+        if: github.event.inputs.action == 'list-all'
+        run: |
+          echo "📋 Listing all SIT environments on this runner"
+          echo "=========================================="
+          echo ""
+          
+          # List all containers with sit- prefix
+          echo "🐳 Running SIT Containers:"
+          docker ps --filter "name=sit-" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" || echo "No SIT containers running"
+          echo ""
+          
+          # List all sit- volumes
+          echo "💾 SIT Volumes:"
+          docker volume ls --filter "name=sit-" --format "table {{.Name}}\t{{.Driver}}" || echo "No SIT volumes found"
+          echo ""
+          
+          # List all sit- networks
+          echo "🔗 SIT Networks:"
+          docker network ls --filter "name=sit-" --format "table {{.Name}}\t{{.Driver}}" || echo "No SIT networks found"
+          echo ""
+          
+          # Show compose projects
+          echo "📦 Active Compose Projects:"
+          docker compose ls --filter "name=sit-" 2>/dev/null || echo "No active SIT compose projects"
+          echo ""
+          
+          echo "💡 Tip: Use the environment name from the container/volume names to manage specific environments"
+
+      - name: Deploy SIT Environment
+        if: github.event.inputs.action == 'deploy'
+        run: |
+          echo "🚀 Deploying SIT environment: ${ENVIRONMENT_NAME}"
+          echo "👤 Deployed by: ${GITHUB_ACTOR}"
+          echo "🔢 Workflow Run ID: ${WORKFLOW_RUN_ID}"
+          echo "📦 Compose Project: ${COMPOSE_PROJECT_NAME}"
+          echo "📄 Compose File: ${COMPOSE_FILE_PATH}"
+          echo ""
+          
+          # Source the port mappings
+          if [ -f "port-mappings.env" ]; then
+            set -a
+            source port-mappings.env
+            set +a
+          fi
+          
+          # Check if environment already exists
+          export COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME}"
+          if docker compose -f "${COMPOSE_FILE_PATH}" ps --format json 2>/dev/null | jq -e '.Name' > /dev/null 2>&1; then
+            echo "⚠️  Warning: Environment '${ENVIRONMENT_NAME}' already exists!"
+            echo "Existing containers:"
+            docker compose -f "${COMPOSE_FILE_PATH}" ps
+            echo ""
+            echo "💡 Use 'teardown' action first to remove the existing environment"
+            echo "❌ Deployment cancelled to prevent conflicts"
+            exit 1
+          fi
+          
+          # Pull latest images
+          echo "📥 Pulling latest images..."
+          docker compose -f "${COMPOSE_FILE_PATH}" pull || true
+          
+          # Start services
+          echo "🔧 Starting services..."
+          docker compose -f "${COMPOSE_FILE_PATH}" up -d --force-recreate
+          
+          # Wait for services to be healthy
+          echo "⏳ Waiting for services to be healthy..."
+          timeout=300
+          elapsed=0
+          
+          while [ $elapsed -lt $timeout ]; do
+            # Count healthy services
+            healthy_count=$(docker compose -f "${COMPOSE_FILE_PATH}" ps --format json 2>/dev/null | jq -r 'select(.Health == "healthy" or .Health == "") | .Name' | wc -l || echo "0")
+            total_count=$(docker compose -f "${COMPOSE_FILE_PATH}" ps --format json 2>/dev/null | jq -r '.Name' | wc -l || echo "0")
+            
+            echo "Healthy services: $healthy_count/$total_count"
+            
+            if [ "$healthy_count" -eq "$total_count" ] && [ "$total_count" -gt 0 ]; then
+              echo "✅ All services are healthy!"
+              break
+            fi
+            
+            sleep 10
+            elapsed=$((elapsed + 10))
+          done
+          
+          if [ $elapsed -ge $timeout ]; then
+            echo "⚠️ Warning: Timeout waiting for all services to be healthy"
+            docker compose -f "${COMPOSE_FILE_PATH}" ps
+            echo ""
+            echo "📋 Recent logs:"
+            docker compose -f "${COMPOSE_FILE_PATH}" logs --tail=50
+          fi
+
+      - name: Show Environment Status
+        if: github.event.inputs.action == 'status' || github.event.inputs.action == 'deploy' || github.event.inputs.action == 'restart'
+        run: |
+          echo "📊 SIT Environment Status"
+          echo "=========================="
+          echo "Environment Name: ${ENVIRONMENT_NAME}"
+          echo "Compose Project: ${COMPOSE_PROJECT_NAME}"
+          echo "Compose File: ${COMPOSE_FILE_PATH}"
+          echo ""
+          
+          echo "🐳 Containers:"
+          docker compose -f "${COMPOSE_FILE_PATH}" ps -a
+          echo ""
+          
+          echo "🌐 Configured Port Mappings:"
+          if [ -f "port-mappings.env" ]; then
+            cat port-mappings.env | grep -v "^#" | sort
+          else
+            echo "   (No port mappings file found)"
+          fi
+          echo ""
+          
+          echo "📦 Docker Volumes:"
+          docker volume ls --filter "name=${COMPOSE_PROJECT_NAME}" 2>/dev/null || echo "   No volumes found"
+          echo ""
+          
+          echo "🔗 Docker Networks:"
+          docker network ls --filter "name=${COMPOSE_PROJECT_NAME}" 2>/dev/null || echo "   No networks found"
+
+      - name: Discover and test service endpoints
+        if: github.event.inputs.action == 'status' || github.event.inputs.action == 'deploy'
+        run: |
+          echo "🏥 Discovering and testing service endpoints..."
+          echo ""
+          
+          # Wait a bit for services to fully start
+          sleep 5
+          
+          # Source the port mappings
+          if [ -f "port-mappings.env" ]; then
+            set -a
+            source port-mappings.env
+            set +a
+          fi
+          
+          # Function to check health endpoint
+          check_health() {
+            local port=$1
+            local name=$2
+            local endpoint=${3:-/actuator/health}
+            
+            local url="http://localhost:${port}${endpoint}"
+            
+            if curl -sf "$url" > /dev/null 2>&1; then
+              echo "✅ $name is healthy (${url})"
+              return 0
+            else
+              echo "❌ $name is not responding (${url})"
+              return 1
+            fi
+          }
+          
+          # Try to detect and check common health endpoints
+          # Look for ports in environment that might be service ports
+          for var in $(env | grep "_PORT=" | grep -v "DB_PORT\|REDIS_PORT" | sort); do
+            VAR_NAME=$(echo "$var" | cut -d= -f1)
+            PORT=$(echo "$var" | cut -d= -f2)
+            SERVICE_NAME=$(echo "$VAR_NAME" | sed 's/_PORT$//' | tr '[:upper:]' '[:lower:]')
+            
+            # Try common health check paths
+            check_health "$PORT" "$SERVICE_NAME" "/actuator/health" || \
+            check_health "$PORT" "$SERVICE_NAME" "/health" || \
+            echo "⚠️  $SERVICE_NAME (port $PORT) - health check not available or not responding"
+          done
+
+      - name: Stop SIT Environment
+        if: github.event.inputs.action == 'stop'
+        run: |
+          echo "⏸️  Stopping SIT environment: ${ENVIRONMENT_NAME}"
+          echo "📦 Compose Project: ${COMPOSE_PROJECT_NAME}"
+          echo "📄 Compose File: ${COMPOSE_FILE_PATH}"
+          echo ""
+          
+          # Stop containers but keep them for later restart
+          echo "🛑 Stopping containers (volumes and data preserved)..."
+          export COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME}"
+          docker compose -f "${COMPOSE_FILE_PATH}" stop
+          
+          echo "✅ Environment stopped successfully"
+          echo ""
+          echo "💡 To restart: Use 'restart' action with environment name: ${ENVIRONMENT_NAME}"
+          echo "💡 To remove completely: Use 'teardown' action"
+          echo ""
+          echo "Current status:"
+          docker compose -f "${COMPOSE_FILE_PATH}" ps -a
+
+      - name: Restart SIT Environment
+        if: github.event.inputs.action == 'restart'
+        run: |
+          echo "🔄 Restarting SIT environment: ${ENVIRONMENT_NAME}"
+          echo "📦 Compose Project: ${COMPOSE_PROJECT_NAME}"
+          echo "📄 Compose File: ${COMPOSE_FILE_PATH}"
+          echo ""
+          
+          # Check if environment exists
+          export COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME}"
+          if ! docker compose -f "${COMPOSE_FILE_PATH}" ps -a --format json 2>/dev/null | jq -e '.Name' > /dev/null 2>&1; then
+            echo "❌ Environment '${ENVIRONMENT_NAME}' not found!"
+            echo "💡 Use 'list-all' action to see available environments"
+            echo "💡 Use 'deploy' action to create a new environment"
+            exit 1
+          fi
+          
+          # Source the port mappings
+          if [ -f "port-mappings.env" ]; then
+            set -a
+            source port-mappings.env
+            set +a
+          fi
+          
+          docker compose -f "${COMPOSE_FILE_PATH}" restart
+          
+          echo "⏳ Waiting for services to restart..."
+          sleep 30
+          
+          echo "📊 Environment status after restart:"
+          docker compose -f "${COMPOSE_FILE_PATH}" ps
+
+      - name: Teardown SIT Environment
+        if: github.event.inputs.action == 'teardown'
+        run: |
+          echo "🧹 Tearing down SIT environment: ${ENVIRONMENT_NAME}"
+          echo "📦 Compose Project: ${COMPOSE_PROJECT_NAME}"
+          echo "📄 Compose File: ${COMPOSE_FILE_PATH}"
+          echo "⚠️  WARNING: This will remove all containers!"
+          echo ""
+          
+          # Check if environment exists
+          export COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME}"
+          if ! docker compose -f "${COMPOSE_FILE_PATH}" ps -a --format json 2>/dev/null | jq -e '.Name' > /dev/null 2>&1; then
+            echo "ℹ️  Environment '${ENVIRONMENT_NAME}' not found or already removed"
+            exit 0
+          fi
+          
+          # Show what will be removed
+          echo "📋 Components to be removed:"
+          docker compose -f "${COMPOSE_FILE_PATH}" ps -a
+          echo ""
+          
+          # Stop and remove containers
+          echo "🛑 Stopping and removing containers..."
+          docker compose -f "${COMPOSE_FILE_PATH}" down
+          
+          # Optionally remove volumes (commented out for safety)
+          # Uncomment the following lines if you want to remove data volumes
+          # echo "🗑️ Removing volumes..."
+          # docker compose -f "${COMPOSE_FILE_PATH}" down -v
+          
+          echo "✅ Environment teardown complete"
+          echo "💡 Volumes preserved. To remove volumes, manually run:"
+          echo "   docker compose -f ${COMPOSE_FILE_PATH} -p ${COMPOSE_PROJECT_NAME} down -v"
+
+      - name: Collect Logs on Failure
+        if: failure()
+        run: |
+          echo "📋 Collecting logs for debugging..."
+          mkdir -p logs
+          
+          # Save container logs
+          docker compose -f "${COMPOSE_FILE_PATH}" logs --tail=200 > logs/compose-logs-${TIMESTAMP}.log 2>&1 || true
+          
+          # Save container status
+          docker compose -f "${COMPOSE_FILE_PATH}" ps -a > logs/compose-status-${TIMESTAMP}.txt 2>&1 || true
+          
+          # Save docker info
+          docker info > logs/docker-info-${TIMESTAMP}.txt 2>&1 || true
+          
+          # Save port mappings
+          if [ -f "port-mappings.env" ]; then
+            cp port-mappings.env logs/port-mappings-${TIMESTAMP}.env
+          fi
+          
+          echo "Logs saved to logs directory"
+          ls -lah logs/
+
+      - name: Upload Logs as Artifact
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sit-logs-${{ github.event.inputs.environment_name }}-${{ github.run_id }}
+          path: logs/
+          retention-days: 7
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "## Generic SIT Environment Management Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Action:** ${{ github.event.inputs.action }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Environment Name:** ${ENVIRONMENT_NAME}" >> $GITHUB_STEP_SUMMARY
+          echo "**Compose Project:** ${COMPOSE_PROJECT_NAME}" >> $GITHUB_STEP_SUMMARY
+          echo "**Compose File:** ${COMPOSE_FILE_PATH}" >> $GITHUB_STEP_SUMMARY
+          echo "**Deployed By:** ${GITHUB_ACTOR}" >> $GITHUB_STEP_SUMMARY
+          echo "**Timestamp:** ${TIMESTAMP}" >> $GITHUB_STEP_SUMMARY
+          echo "**Status:** ${{ job.status }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "---" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [ "${{ github.event.inputs.action }}" == "deploy" ] || [ "${{ github.event.inputs.action }}" == "status" ]; then
+            echo "### 🌐 Service Endpoints (Port Offset: ${PORT_OFFSET})" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            
+            if [ -f "port-mappings.env" ]; then
+              echo "| Variable | Port |" >> $GITHUB_STEP_SUMMARY
+              echo "|----------|------|" >> $GITHUB_STEP_SUMMARY
+              
+              # Parse port mappings and create table
+              cat port-mappings.env | grep -v "^#" | grep "=" | while IFS='=' read -r var port; do
+                var_clean=$(echo "$var" | sed 's/export //')
+                echo "| $var_clean | $port |" >> $GITHUB_STEP_SUMMARY
+              done
+              
+              echo "" >> $GITHUB_STEP_SUMMARY
+            fi
+            
+            echo "💡 **Tip:** Save these port numbers! They're unique to your environment name (${ENVIRONMENT_NAME})" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          echo "### 📝 Quick Reference" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "To manage this environment, use these commands:" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
+          echo "# Via GitHub CLI" >> $GITHUB_STEP_SUMMARY
+          echo "gh workflow run sit-environment-generic.yml \\" >> $GITHUB_STEP_SUMMARY
+          echo "  -f action=status \\" >> $GITHUB_STEP_SUMMARY
+          echo "  -f environment_name=${ENVIRONMENT_NAME} \\" >> $GITHUB_STEP_SUMMARY
+          echo "  -f compose_file=${COMPOSE_FILE_PATH}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "gh workflow run sit-environment-generic.yml \\" >> $GITHUB_STEP_SUMMARY
+          echo "  -f action=stop \\" >> $GITHUB_STEP_SUMMARY
+          echo "  -f environment_name=${ENVIRONMENT_NAME} \\" >> $GITHUB_STEP_SUMMARY
+          echo "  -f compose_file=${COMPOSE_FILE_PATH}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "gh workflow run sit-environment-generic.yml \\" >> $GITHUB_STEP_SUMMARY
+          echo "  -f action=restart \\" >> $GITHUB_STEP_SUMMARY
+          echo "  -f environment_name=${ENVIRONMENT_NAME} \\" >> $GITHUB_STEP_SUMMARY
+          echo "  -f compose_file=${COMPOSE_FILE_PATH}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "gh workflow run sit-environment-generic.yml \\" >> $GITHUB_STEP_SUMMARY
+          echo "  -f action=teardown \\" >> $GITHUB_STEP_SUMMARY
+          echo "  -f environment_name=${ENVIRONMENT_NAME} \\" >> $GITHUB_STEP_SUMMARY
+          echo "  -f compose_file=${COMPOSE_FILE_PATH}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "# List all environments" >> $GITHUB_STEP_SUMMARY
+          echo "gh workflow run sit-environment-generic.yml \\" >> $GITHUB_STEP_SUMMARY
+          echo "  -f action=list-all \\" >> $GITHUB_STEP_SUMMARY
+          echo "  -f environment_name=dummy" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 🎯 Key Features" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ **Generic & Reusable**: Works with any docker-compose.yml file" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ **Auto Port Discovery**: Automatically detects and configures port mappings" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ **Multi-Environment**: Run multiple isolated environments simultaneously" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ **Port Conflict Avoidance**: Unique port offsets per environment" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ **Service Discovery**: Automatically detects services and health checks" >> $GITHUB_STEP_SUMMARY

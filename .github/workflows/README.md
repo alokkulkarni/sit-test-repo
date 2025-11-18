@@ -1,10 +1,170 @@
-# SIT Environment Management Workflow
+# SIT Environment Management Workflows
 
-This GitHub Actions workflow allows you to manage on-demand System Integration Testing (SIT) environments using Docker Compose on a macOS self-hosted runner. **Multiple users can safely run isolated environments simultaneously.**
+This directory contains GitHub Actions workflows for managing on-demand System Integration Testing (SIT) environments using Docker Compose on a macOS self-hosted runner. **Multiple users can safely run isolated environments simultaneously.**
+
+## Available Workflows
+
+### 1. `sit-environment.yml` - Standard SIT Environment
+The original workflow designed specifically for the payment system docker-compose.yml with predefined services.
+
+### 2. `sit-environment-generic.yml` - Generic SIT Environment ⭐ NEW
+A fully **generic and reusable** workflow that can work with **ANY docker-compose.yml file**. Features automatic service discovery and dynamic port configuration.
 
 ## Quick Start
 
 📖 **For detailed usage guide, see:** [ENVIRONMENT_MANAGEMENT_GUIDE.md](../../ENVIRONMENT_MANAGEMENT_GUIDE.md)
+
+---
+
+## Generic Workflow (sit-environment-generic.yml) ⭐
+
+### Overview
+
+The **generic workflow** is a powerful, reusable solution that can manage any docker-compose file without modification. It automatically:
+- ✅ Discovers services from your compose file
+- ✅ Detects port mappings with environment variables
+- ✅ Calculates unique ports per environment to avoid conflicts
+- ✅ Tests service health endpoints automatically
+- ✅ Works with any docker-compose.yml structure
+
+### Key Features
+
+| Feature | Description |
+|---------|-------------|
+| **Docker-Compose Selection** | Choose which compose file to use via input parameter |
+| **Auto Port Discovery** | Automatically finds and configures port mappings like `${SERVICE_PORT:-8080}` |
+| **Service Discovery** | Detects all services defined in your compose file |
+| **Port Conflict Avoidance** | Hash-based unique port offset per environment (range: 100-999) |
+| **Health Check Discovery** | Automatically tries common health endpoints `/actuator/health`, `/health` |
+| **Multi-Environment** | Run multiple isolated environments with different compose files |
+
+### Usage
+
+```bash
+# Deploy with default docker-compose.yml
+gh workflow run sit-environment-generic.yml \
+  -f action=deploy \
+  -f environment_name=john-dev
+
+# Deploy with custom compose file
+gh workflow run sit-environment-generic.yml \
+  -f action=deploy \
+  -f environment_name=alice-staging \
+  -f compose_file=docker-compose-staging.yml
+
+# Check status
+gh workflow run sit-environment-generic.yml \
+  -f action=status \
+  -f environment_name=john-dev \
+  -f compose_file=docker-compose.yml
+
+# Stop environment
+gh workflow run sit-environment-generic.yml \
+  -f action=stop \
+  -f environment_name=john-dev \
+  -f compose_file=docker-compose.yml
+
+# Restart environment
+gh workflow run sit-environment-generic.yml \
+  -f action=restart \
+  -f environment_name=john-dev \
+  -f compose_file=docker-compose.yml
+
+# Teardown environment
+gh workflow run sit-environment-generic.yml \
+  -f action=teardown \
+  -f environment_name=john-dev \
+  -f compose_file=docker-compose.yml
+
+# List all environments
+gh workflow run sit-environment-generic.yml \
+  -f action=list-all \
+  -f environment_name=dummy
+```
+
+### How Port Discovery Works
+
+The generic workflow parses your docker-compose file looking for port mappings with environment variables:
+
+```yaml
+# In your docker-compose.yml
+services:
+  my-service:
+    ports:
+      - "${MY_SERVICE_PORT:-8080}:8080"
+```
+
+**What happens:**
+1. Workflow detects `MY_SERVICE_PORT` variable with default `8080`
+2. Calculates unique offset based on environment name hash (e.g., `256`)
+3. Sets `MY_SERVICE_PORT=8336` (8080 + 256)
+4. Exports to environment before running docker-compose
+5. Your service runs on unique port `8336` instead of `8080`
+
+### Compose File Requirements
+
+For the generic workflow to automatically manage ports, your docker-compose.yml should use environment variables for port mappings:
+
+```yaml
+services:
+  api:
+    ports:
+      - "${API_PORT:-8080}:8080"  # ✅ Will be auto-discovered
+  
+  database:
+    ports:
+      - "${DB_PORT:-5432}:5432"   # ✅ Will be auto-discovered
+  
+  cache:
+    ports:
+      - "6379:6379"               # ⚠️ Fixed port, won't be adjusted
+```
+
+### Example: Using with Multiple Compose Files
+
+```bash
+# Development environment
+gh workflow run sit-environment-generic.yml \
+  -f action=deploy \
+  -f environment_name=john-dev \
+  -f compose_file=docker-compose.yml
+
+# Staging environment with different compose
+gh workflow run sit-environment-generic.yml \
+  -f action=deploy \
+  -f environment_name=john-staging \
+  -f compose_file=docker-compose-staging.yml
+
+# Testing environment
+gh workflow run sit-environment-generic.yml \
+  -f action=deploy \
+  -f environment_name=alice-test \
+  -f compose_file=docker-compose-test.yml
+```
+
+Each environment gets:
+- ✅ Unique container names (prefixed with `sit-<env-name>-`)
+- ✅ Unique port assignments (based on hash + offset)
+- ✅ Isolated volumes and networks
+- ✅ Independent lifecycle management
+
+### Port Mappings Output
+
+After deployment or status check, the workflow shows all configured ports:
+
+```
+🌐 Configured Port Mappings:
+export API_PORT=8256
+export DB_PORT=5356
+export CACHE_PORT=6279
+export ADMIN_PORT=9156
+```
+
+These are saved to `port-mappings.env` file in the workflow for reference.
+
+---
+
+## Standard Workflow (sit-environment.yml)
 
 ## Prerequisites
 
@@ -13,9 +173,13 @@ This GitHub Actions workflow allows you to manage on-demand System Integration T
 3. **Docker Compose**: Docker Compose must be available (comes with Docker Desktop)
 4. **Network Access**: The runner must have access to pull images from GitHub Container Registry
 
-## Available Actions
+### Overview
 
-The workflow supports **six actions**:
+The **standard workflow** is specifically designed for the payment system's docker-compose.yml with predefined services (beneficiaries, paymentprocessor, paymentconsumer, databases, redis).
+
+### Available Actions
+
+Both workflows support **six actions**:
 
 ### 1. 🚀 **deploy** - Create New Environment
 Deploys a complete SIT environment with all services, pulls latest images, waits for health checks.
@@ -96,10 +260,10 @@ docker ps --filter "name=sit-"
 6. **Enter your unique environment name** (e.g., `john-dev`, `alice-test`)
 7. Click **Run workflow**
 
-### Via GitHub CLI
+### Via GitHub CLI (Standard Workflow)
 
 ```bash
-# Deploy new environment
+# Deploy new environment (standard workflow)
 gh workflow run sit-environment.yml -f action=deploy -f environment_name=john-dev
 
 # Stop environment (pause, keep data)
@@ -128,9 +292,20 @@ gh workflow run sit-environment.yml -f action=teardown -f environment_name=john-
 
 *Volumes are preserved by default for safety. To remove: `docker compose down -v`
 
+## Choosing Between Workflows
+
+| Use Case | Recommended Workflow |
+|----------|---------------------|
+| Payment system testing | `sit-environment.yml` (Standard) |
+| Custom docker-compose file | `sit-environment-generic.yml` (Generic) |
+| Multiple compose files | `sit-environment-generic.yml` (Generic) |
+| Different projects in same repo | `sit-environment-generic.yml` (Generic) |
+| Pre-configured services | `sit-environment.yml` (Standard) |
+| Maximum flexibility | `sit-environment-generic.yml` (Generic) |
+
 ## Common Workflows
 
-### Daily Development
+### Daily Development (Standard Workflow)
 ```bash
 # Morning: Deploy
 gh workflow run sit-environment.yml -f action=deploy -f environment_name=john-dev
@@ -161,31 +336,69 @@ gh workflow run sit-environment.yml -f action=teardown -f environment_name=featu
 
 ### Finding Your Environment
 ```bash
-# List all to see what's running
+# List all to see what's running (works with both workflows)
 gh workflow run sit-environment.yml -f action=list-all -f environment_name=dummy
+# OR
+gh workflow run sit-environment-generic.yml -f action=list-all -f environment_name=dummy
 
 # Check your specific environment
 gh workflow run sit-environment.yml -f action=status -f environment_name=YOUR-NAME
 ```
 
+### Using Generic Workflow for Different Projects
+```bash
+# Deploy microservices compose
+gh workflow run sit-environment-generic.yml \
+  -f action=deploy \
+  -f environment_name=john-microservices \
+  -f compose_file=docker-compose-microservices.yml
+
+# Deploy data pipeline compose
+gh workflow run sit-environment-generic.yml \
+  -f action=deploy \
+  -f environment_name=alice-pipeline \
+  -f compose_file=docker-compose-pipeline.yml
+
+# Both run simultaneously with unique ports!
+```
+
 ## Service Endpoints
 
-Once deployed, the following services are available:
+### Standard Workflow (sit-environment.yml)
+
+Once deployed, the following services are available with **unique ports per environment**:
 
 | Service | Endpoint | Description |
 |---------|----------|-------------|
-| Beneficiaries API | http://localhost:8080 | Beneficiaries management service |
-| Payment Processor API | http://localhost:8081 | Payment processing service |
-| Payment Consumer API | http://localhost:8082 | Payment consumer service |
-| PostgreSQL (Beneficiaries) | localhost:5432 | Database for beneficiaries |
-| PostgreSQL (Payment Processor) | localhost:5433 | Database for payment processor |
-| Redis | localhost:6379 | Redis cache for beneficiaries |
+| Beneficiaries API | http://localhost:${BENEFICIARIES_PORT} | Beneficiaries management service |
+| Payment Processor API | http://localhost:${PAYMENTPROCESSOR_PORT} | Payment processing service |
+| Payment Consumer API | http://localhost:${PAYMENTCONSUMER_PORT} | Payment consumer service |
+| PostgreSQL (Beneficiaries) | localhost:${BENEFICIARIES_DB_PORT} | Database for beneficiaries |
+| PostgreSQL (Payment Processor) | localhost:${PAYMENTPROCESSOR_DB_PORT} | Database for payment processor |
+| Redis | localhost:${REDIS_PORT} | Redis cache for beneficiaries |
+
+**Note:** Port numbers are calculated as `BASE_PORT + OFFSET` where OFFSET is unique per environment (range: 100-999).
+
+Example for environment `john-dev` (offset might be 256):
+- Beneficiaries API: http://localhost:8256 (8000 + 256)
+- Payment Processor API: http://localhost:8257 (8001 + 256)
+- Beneficiaries DB: localhost:5256 (5000 + 256)
+
+### Generic Workflow (sit-environment-generic.yml)
+
+Port assignments are **automatically discovered** from your docker-compose file. After deployment, check the workflow summary or `port-mappings.env` for exact port numbers.
 
 ### Health Check Endpoints
 
-- Beneficiaries: http://localhost:8080/actuator/health
-- Payment Processor: http://localhost:8081/actuator/health
-- Payment Consumer: http://localhost:8082/actuator/health
+**Standard Workflow:**
+- Beneficiaries: http://localhost:${BENEFICIARIES_PORT}/actuator/health
+- Payment Processor: http://localhost:${PAYMENTPROCESSOR_PORT}/actuator/health
+- Payment Consumer: http://localhost:${PAYMENTCONSUMER_PORT}/actuator/health
+
+**Generic Workflow:**
+- Automatically discovers and tests common health endpoints
+- Tries: `/actuator/health`, `/health`
+- Results shown in workflow output
 
 ## Troubleshooting
 
@@ -294,3 +507,35 @@ Logs are retained for 7 days. To change:
 ```yaml
 retention-days: 7  # Adjust as needed
 ```
+
+## Summary: Generic vs Standard Workflow
+
+| Feature | Generic Workflow | Standard Workflow |
+|---------|------------------|-------------------|
+| Docker-compose file | ✅ Any file via parameter | ❌ Fixed to docker-compose.yml |
+| Port discovery | ✅ Automatic | ✅ Predefined variables |
+| Service discovery | ✅ Automatic from compose | ❌ Hardcoded services |
+| Health checks | ✅ Auto-detects endpoints | ✅ Predefined endpoints |
+| Flexibility | ⭐ Maximum | ⭐ Optimized for payment system |
+| Setup required | None | None |
+| Use case | Any project/compose file | Payment system specific |
+
+## Benefits Summary
+
+✅ **Zero configuration** - Just point it at any docker-compose file  
+✅ **Multi-environment support** - Run dev, test, staging simultaneously  
+✅ **Port conflict prevention** - Each environment gets unique ports  
+✅ **Complete isolation** - Separate containers, volumes, networks per environment  
+✅ **Service discovery** - Automatically finds and tests endpoints  
+✅ **Flexibility** - Generic workflow works with any docker-compose structure  
+✅ **Multi-user safe** - Multiple users can run isolated environments  
+
+---
+
+## Getting Started
+
+1. **For payment system testing** → Use `sit-environment.yml`
+2. **For any other docker-compose file** → Use `sit-environment-generic.yml`
+3. **Not sure?** → Start with `sit-environment-generic.yml` (works everywhere!)
+
+📖 **For detailed usage guide, see:** [ENVIRONMENT_MANAGEMENT_GUIDE.md](../../ENVIRONMENT_MANAGEMENT_GUIDE.md)
