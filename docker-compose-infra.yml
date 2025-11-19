@@ -1,0 +1,340 @@
+version: '3.8'
+
+# Docker Compose for AWS/Azure Infrastructure Deployment
+# This configuration includes Nginx auto-configuration labels for reverse proxy setup
+# Compatible with both AWS EC2 and Azure VM deployments
+
+services:
+  # PostgreSQL Database for beneficiaries
+  beneficiaries-db:
+    image: ghcr.io/alokkulkarni/testcontainers-registry/testcontainers/postgres:16-alpine
+    container_name: beneficiaries-postgres
+    environment:
+      POSTGRES_DB: beneficiaries
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${BENEFICIARIES_DB_PASSWORD:-postgres}
+    ports:
+      - "${BENEFICIARIES_DB_PORT:-5432}:5432"
+    volumes:
+      - beneficiaries-db-data:/var/lib/postgresql/data
+      - ./beneficiaries/init.db:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d beneficiaries"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - payment-network
+    restart: unless-stopped
+    labels:
+      # Disable Nginx auto-config for database (internal service)
+      nginx.enable: "false"
+
+  # PostgreSQL Database for paymentprocessor
+  paymentprocessor-db:
+    image: ghcr.io/alokkulkarni/testcontainers-registry/testcontainers/postgres:16-alpine
+    container_name: paymentprocessor-postgres
+    environment:
+      POSTGRES_DB: paymentprocessor
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${PAYMENTPROCESSOR_DB_PASSWORD:-postgres}
+    ports:
+      - "${PAYMENTPROCESSOR_DB_PORT:-5433}:5432"
+    volumes:
+      - paymentprocessor-db-data:/var/lib/postgresql/data
+      - ./paymentprocessor/init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d paymentprocessor"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - payment-network
+    restart: unless-stopped
+    labels:
+      # Disable Nginx auto-config for database (internal service)
+      nginx.enable: "false"
+
+  # Redis for beneficiaries
+  redis:
+    image: ghcr.io/alokkulkarni/testcontainers-registry/testcontainers/redis:7-alpine
+    container_name: beneficiaries-redis
+    command: redis-server --appendonly yes
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - payment-network
+    restart: unless-stopped
+    labels:
+      # Disable Nginx auto-config for Redis (internal service)
+      nginx.enable: "false"
+
+  # Beneficiaries Application
+  beneficiaries:
+    image: ghcr.io/alokkulkarni/beneficiaries:latest
+    container_name: beneficiaries-app
+    environment:
+      SERVER_PORT: 8080
+      SPRING_DATASOURCE_URL: jdbc:postgresql://beneficiaries-db:5432/beneficiaries
+      SPRING_DATASOURCE_USERNAME: postgres
+      SPRING_DATASOURCE_PASSWORD: ${BENEFICIARIES_DB_PASSWORD:-postgres}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ""
+      HEALTH_DETAILS: always
+      LOG_LEVEL_ROOT: INFO
+      LOG_LEVEL_APP: INFO
+      LOG_LEVEL_JDBC: INFO
+      HIBERNATE_DDL_AUTO: update
+      TIMEZONE: ${TIMEZONE:-UTC}
+      # For cloud deployment with external URLs
+      SERVER_FORWARD_HEADERS_STRATEGY: framework
+    ports:
+      - "${BENEFICIARIES_PORT:-8080}:8080"
+    depends_on:
+      beneficiaries-db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/actuator/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - payment-network
+    restart: unless-stopped
+    labels:
+      # Nginx auto-configuration for reverse proxy
+      nginx.enable: "true"
+      nginx.path: "/${ENVIRONMENT_NAME:-production}/beneficiaries"
+      nginx.port: "${BENEFICIARIES_PORT:-8080}"
+      # Optional: For host-based routing
+      # nginx.host: "beneficiaries.example.com"
+      
+      # Metadata labels
+      app.name: "beneficiaries"
+      app.version: "latest"
+      app.environment: "${ENVIRONMENT_NAME:-production}"
+
+  # Payment Processor Application
+  paymentprocessor:
+    image: ghcr.io/alokkulkarni/paymentprocessor:latest
+    container_name: paymentprocessor-app
+    environment:
+      SERVER_PORT: 8081
+      SPRING_DATASOURCE_URL: jdbc:postgresql://paymentprocessor-db:5432/paymentprocessor
+      SPRING_DATASOURCE_USERNAME: postgres
+      SPRING_DATASOURCE_PASSWORD: ${PAYMENTPROCESSOR_DB_PASSWORD:-postgres}
+      HEALTH_DETAILS: always
+      LOG_LEVEL_ROOT: INFO
+      LOG_LEVEL_APP: INFO
+      LOG_LEVEL_JDBC: INFO
+      HIBERNATE_DDL_AUTO: update
+      TIMEZONE: ${TIMEZONE:-UTC}
+      # For cloud deployment with external URLs
+      SERVER_FORWARD_HEADERS_STRATEGY: framework
+    ports:
+      - "${PAYMENTPROCESSOR_PORT:-8081}:8081"
+    depends_on:
+      paymentprocessor-db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8081/actuator/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - payment-network
+    restart: unless-stopped
+    labels:
+      # Nginx auto-configuration for reverse proxy
+      nginx.enable: "true"
+      nginx.path: "/${ENVIRONMENT_NAME:-production}/payments"
+      nginx.port: "${PAYMENTPROCESSOR_PORT:-8081}"
+      # Optional: For host-based routing
+      # nginx.host: "payments.example.com"
+      
+      # Metadata labels
+      app.name: "paymentprocessor"
+      app.version: "latest"
+      app.environment: "${ENVIRONMENT_NAME:-production}"
+
+  # Payment Consumer Application
+  paymentconsumer:
+    image: ghcr.io/alokkulkarni/paymentconsumer/paymentconsumer:latest
+    container_name: paymentconsumer-app
+    environment:
+      # Server Configuration
+      SERVER_PORT: 8082
+      # External service connection strings (use internal network names)
+      BENEFICIARIES_SERVICE_URL: http://beneficiaries:8080
+      PAYMENT_PROCESSOR_SERVICE_URL: http://paymentprocessor:8081
+      # Spring Boot Configuration
+      SPRING_APPLICATION_NAME: paymentConsumer
+      SPRING_AUTOCONFIGURE_EXCLUDE: org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration,org.springframework.boot.autoconfigure.jdbc.DataSourceTransactionManagerAutoConfiguration
+      # Logging configuration
+      HEALTH_DETAILS: always
+      LOG_LEVEL_ROOT: INFO
+      LOG_LEVEL_APP: INFO
+      LOG_LEVEL_SPRING_WEB: INFO
+      TIMEZONE: ${TIMEZONE:-UTC}
+      # Actuator endpoints
+      ACTUATOR_ENDPOINTS: health,info,metrics,prometheus
+      PROMETHEUS_ENABLED: true
+      # For cloud deployment with external URLs
+      SERVER_FORWARD_HEADERS_STRATEGY: framework
+      # Resilience4j Circuit Breaker (optional overrides)
+      # RESILIENCE4J_CIRCUITBREAKER_CONFIGS_DEFAULT_SLIDINGWINDOWSIZE: 10
+      # RESILIENCE4J_CIRCUITBREAKER_CONFIGS_DEFAULT_FAILURERATETHRESHOLD: 50
+    ports:
+      - "${PAYMENTCONSUMER_PORT:-8082}:8082"
+    depends_on:
+      beneficiaries:
+        condition: service_healthy
+      paymentprocessor:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8082/actuator/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - payment-network
+    restart: unless-stopped
+    labels:
+      # Nginx auto-configuration for reverse proxy
+      nginx.enable: "true"
+      nginx.path: "/${ENVIRONMENT_NAME:-production}/consumer"
+      nginx.port: "${PAYMENTCONSUMER_PORT:-8082}"
+      # Optional: For host-based routing
+      # nginx.host: "consumer.example.com"
+      
+      # Metadata labels
+      app.name: "paymentconsumer"
+      app.version: "latest"
+      app.environment: "${ENVIRONMENT_NAME:-production}"
+
+networks:
+  payment-network:
+    driver: bridge
+    name: payment-network
+
+volumes:
+  beneficiaries-db-data:
+    name: beneficiaries-db-data
+  paymentprocessor-db-data:
+    name: paymentprocessor-db-data
+  redis-data:
+    name: redis-data
+
+# ============================================================================
+# DEPLOYMENT INSTRUCTIONS
+# ============================================================================
+#
+# For AWS EC2 or Azure VM deployment:
+#
+# 1. Set environment variables (create .env file):
+#    ENVIRONMENT_NAME=production
+#    TIMEZONE=UTC
+#    BENEFICIARIES_PORT=8080
+#    PAYMENTPROCESSOR_PORT=8081
+#    PAYMENTCONSUMER_PORT=8082
+#    BENEFICIARIES_DB_PASSWORD=<secure-password>
+#    PAYMENTPROCESSOR_DB_PASSWORD=<secure-password>
+#
+# 2. Deploy with docker-compose:
+#    docker-compose -f docker-compose-infra.yml up -d
+#
+# 3. Nginx will automatically configure reverse proxy based on labels:
+#    - http://<server-ip>/${ENVIRONMENT_NAME}/beneficiaries → localhost:${BENEFICIARIES_PORT}
+#    - http://<server-ip>/${ENVIRONMENT_NAME}/payments → localhost:${PAYMENTPROCESSOR_PORT}
+#    - http://<server-ip>/${ENVIRONMENT_NAME}/consumer → localhost:${PAYMENTCONSUMER_PORT}
+#
+#    Examples with different environments:
+#    Production: http://server/production/beneficiaries → localhost:8080
+#    Staging:    http://server/staging/beneficiaries → localhost:9080
+#    Dev:        http://server/dev/beneficiaries → localhost:10080
+#
+#    Note: Nginx proxies to host-mapped ports, not container ports.
+#    This allows multiple environments with different port mappings.
+#
+# 4. For host-based routing (optional):
+#    - Uncomment nginx.host labels
+#    - Configure DNS A records pointing to your server IP
+#    - Access via: http://beneficiaries.example.com
+#
+# 5. Monitor deployment:
+#    docker-compose -f docker-compose-infra.yml ps
+#    docker-compose -f docker-compose-infra.yml logs -f
+#
+# 6. Health checks:
+#    curl http://<server-ip>/${ENVIRONMENT_NAME}/beneficiaries/actuator/health
+#    curl http://<server-ip>/${ENVIRONMENT_NAME}/payments/actuator/health
+#    curl http://<server-ip>/${ENVIRONMENT_NAME}/consumer/actuator/health
+#
+#    Examples:
+#    curl http://server/production/beneficiaries/actuator/health
+#    curl http://server/staging/payments/actuator/health
+#
+# ============================================================================
+# SECURITY CONSIDERATIONS
+# ============================================================================
+#
+# 1. Use secrets management for sensitive data:
+#    - AWS Secrets Manager or Azure Key Vault for passwords
+#    - GitHub Secrets for CI/CD variables
+#
+# 2. Database access should be internal only:
+#    - Remove port mappings for databases in production
+#    - Use docker network for inter-service communication
+#
+# 3. Enable HTTPS with Let's Encrypt:
+#    - See NGINX_GUIDE.md for SSL certificate setup
+#    - Configure certbot for automatic renewal
+#
+# 4. Implement security groups/NSG rules:
+#    - Allow only ports 80, 443, and SSH (22)
+#    - Restrict SSH to specific IP ranges
+#
+# 5. Regular updates:
+#    - Update container images regularly
+#    - Apply security patches to host OS
+#
+# ============================================================================
+# NGINX LABEL REFERENCE
+# ============================================================================
+#
+# nginx.enable: "true|false"
+#   - Enable/disable Nginx auto-configuration
+#   - Default: true for application containers
+#
+# nginx.path: "/path"
+#   - URL path prefix for the service
+#   - Use with environment variable: /${ENVIRONMENT_NAME}/service-name
+#   - Example: /production/api, /staging/admin, /dev/payments
+#   - Results in: http://server-ip/${ENVIRONMENT_NAME}/path → service
+#   - Allows clear separation between multiple environments
+#
+# nginx.host: "domain.com"
+#   - Server name for host-based routing
+#   - Requires DNS configuration
+#   - Example: api.example.com
+#
+# nginx.port: "8080"
+#   - Backend port Nginx should proxy to (host-mapped port)
+#   - Use environment variable for flexibility: ${BENEFICIARIES_PORT:-8080}
+#   - This is the published port on the host, not the container port
+#   - Allows multiple environments with different port mappings
+#
+# ============================================================================
