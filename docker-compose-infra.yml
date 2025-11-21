@@ -1,5 +1,3 @@
-version: '3.8'
-
 # Docker Compose for AWS/Azure Infrastructure Deployment
 # This configuration includes Nginx auto-configuration labels for reverse proxy setup
 # Compatible with both AWS EC2 and Azure VM deployments
