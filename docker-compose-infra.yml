@@ -22,7 +22,7 @@ services:
       timeout: 5s
       retries: 5
     networks:
-      - payment-network
+      - app-network
     restart: unless-stopped
     labels:
       # Disable Nginx auto-config for database (internal service)
@@ -47,7 +47,7 @@ services:
       timeout: 5s
       retries: 5
     networks:
-      - payment-network
+      - app-network
     restart: unless-stopped
     labels:
       # Disable Nginx auto-config for database (internal service)
@@ -68,7 +68,7 @@ services:
       timeout: 5s
       retries: 5
     networks:
-      - payment-network
+      - app-network
     restart: unless-stopped
     labels:
       # Disable Nginx auto-config for Redis (internal service)
@@ -108,7 +108,7 @@ services:
       retries: 3
       start_period: 40s
     networks:
-      - payment-network
+      - app-network
     restart: unless-stopped
     labels:
       # Nginx auto-configuration for reverse proxy
@@ -152,7 +152,7 @@ services:
       retries: 3
       start_period: 40s
     networks:
-      - payment-network
+      - app-network
     restart: unless-stopped
     labels:
       # Nginx auto-configuration for reverse proxy
@@ -208,7 +208,7 @@ services:
       retries: 3
       start_period: 40s
     networks:
-      - payment-network
+      - app-network
     restart: unless-stopped
     labels:
       # Nginx auto-configuration for reverse proxy
@@ -224,9 +224,9 @@ services:
       app.environment: "${ENVIRONMENT_NAME:-production}"
 
 networks:
-  payment-network:
+  app-network:
     driver: bridge
-    name: payment-network
+    name: app-network
 
 volumes:
   beneficiaries-db-data:
@@ -295,7 +295,7 @@ volumes:
 #
 # 2. Database access should be internal only:
 #    - Remove port mappings for databases in production
-#    - Use docker network for inter-service communication
+#    - Use docker network (app-network) for inter-service communication
 #
 # 3. Enable HTTPS with Let's Encrypt:
 #    - See NGINX_GUIDE.md for SSL certificate setup
