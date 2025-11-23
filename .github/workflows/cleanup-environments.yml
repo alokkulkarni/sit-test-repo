@@ -21,7 +21,7 @@ on:
 
 jobs:
   cleanup-environments:
-    runs-on: [self-hosted, aws, linux]
+    runs-on: [self-hosted, Linux, X64, aws]
     timeout-minutes: 30
     
     steps:
