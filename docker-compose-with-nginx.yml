@@ -197,10 +197,7 @@ services:
 networks:
   payment-network:
     driver: bridge
-    name: payment-network
-    # For AWS infrastructure compatibility, you may want to use:
-    # external: true
-    # name: app-network
+    name: app-network  # Must match network expected by AWS/Azure user-data scripts
 
 volumes:
   beneficiaries-db-data:

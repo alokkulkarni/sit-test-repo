@@ -114,7 +114,7 @@ services:
       # Nginx auto-configuration for reverse proxy
       nginx.enable: "true"
       nginx.path: "/${ENVIRONMENT_NAME:-production}/beneficiaries"
-      nginx.port: "${BENEFICIARIES_PORT:-8080}"
+      nginx.port: "8080"  # Internal container port, NOT host-mapped port
       # Optional: For host-based routing
       # nginx.host: "beneficiaries.example.com"
       
@@ -158,7 +158,7 @@ services:
       # Nginx auto-configuration for reverse proxy
       nginx.enable: "true"
       nginx.path: "/${ENVIRONMENT_NAME:-production}/payments"
-      nginx.port: "${PAYMENTPROCESSOR_PORT:-8081}"
+      nginx.port: "8081"  # Internal container port, NOT host-mapped port
       # Optional: For host-based routing
       # nginx.host: "payments.example.com"
       
@@ -214,7 +214,7 @@ services:
       # Nginx auto-configuration for reverse proxy
       nginx.enable: "true"
       nginx.path: "/${ENVIRONMENT_NAME:-production}/consumer"
-      nginx.port: "${PAYMENTCONSUMER_PORT:-8082}"
+      nginx.port: "8082"  # Internal container port, NOT host-mapped port
       # Optional: For host-based routing
       # nginx.host: "consumer.example.com"
       
@@ -255,17 +255,17 @@ volumes:
 #    docker-compose -f docker-compose-infra.yml up -d
 #
 # 3. Nginx will automatically configure reverse proxy based on labels:
-#    - http://<server-ip>/${ENVIRONMENT_NAME}/beneficiaries → localhost:${BENEFICIARIES_PORT}
-#    - http://<server-ip>/${ENVIRONMENT_NAME}/payments → localhost:${PAYMENTPROCESSOR_PORT}
-#    - http://<server-ip>/${ENVIRONMENT_NAME}/consumer → localhost:${PAYMENTCONSUMER_PORT}
+#    - http://<server-ip>/${ENVIRONMENT_NAME}/beneficiaries → container-ip:8080
+#    - http://<server-ip>/${ENVIRONMENT_NAME}/payments → container-ip:8081
+#    - http://<server-ip>/${ENVIRONMENT_NAME}/consumer → container-ip:8082
 #
 #    Examples with different environments:
-#    Production: http://server/production/beneficiaries → localhost:8080
-#    Staging:    http://server/staging/beneficiaries → localhost:9080
-#    Dev:        http://server/dev/beneficiaries → localhost:10080
+#    Production: http://server/production/beneficiaries → container-ip:8080
+#    Staging:    http://server/staging/beneficiaries → container-ip:8080
+#    Dev:        http://server/dev/beneficiaries → container-ip:8080
 #
-#    Note: Nginx proxies to host-mapped ports, not container ports.
-#    This allows multiple environments with different port mappings.
+#    Note: Native Nginx connects directly to container IPs on app-network.
+#    Host port mappings are for direct access only, not used by Nginx.
 #
 # 4. For host-based routing (optional):
 #    - Uncomment nginx.host labels
@@ -330,9 +330,9 @@ volumes:
 #   - Example: api.example.com
 #
 # nginx.port: "8080"
-#   - Backend port Nginx should proxy to (host-mapped port)
-#   - Use environment variable for flexibility: ${BENEFICIARIES_PORT:-8080}
-#   - This is the published port on the host, not the container port
-#   - Allows multiple environments with different port mappings
+#   - Backend container's internal port (NOT the host-mapped port)
+#   - For native Nginx setup: Connects directly to container IP on Docker network
+#   - This is the port the application listens on INSIDE the container
+#   - Example: If container listens on 8080, use "8080" even if mapped to 9080 on host
 #
 # ============================================================================
