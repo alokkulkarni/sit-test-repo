@@ -1,0 +1,211 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database for beneficiaries
+  beneficiaries-db:
+    image: ghcr.io/alokkulkarni/testcontainers-registry/testcontainers/postgres:16-alpine
+    container_name: beneficiaries-postgres
+    environment:
+      POSTGRES_DB: beneficiaries
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "${BENEFICIARIES_DB_PORT:-5432}:5432"
+    volumes:
+      - beneficiaries-db-data:/var/lib/postgresql/data
+      - ./beneficiaries/init.db:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d beneficiaries"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - payment-network
+    labels:
+      nginx.enable: "false"  # Database should not be exposed via Nginx
+
+  # PostgreSQL Database for paymentprocessor
+  paymentprocessor-db:
+    image: ghcr.io/alokkulkarni/testcontainers-registry/testcontainers/postgres:16-alpine
+    container_name: paymentprocessor-postgres
+    environment:
+      POSTGRES_DB: paymentprocessor
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "${PAYMENTPROCESSOR_DB_PORT:-5433}:5432"
+    volumes:
+      - paymentprocessor-db-data:/var/lib/postgresql/data
+      - ./paymentprocessor/init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d paymentprocessor"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - payment-network
+    labels:
+      nginx.enable: "false"  # Database should not be exposed via Nginx
+
+  # Redis for beneficiaries
+  redis:
+    image: ghcr.io/alokkulkarni/testcontainers-registry/testcontainers/redis:7-alpine
+    container_name: beneficiaries-redis
+    command: redis-server --appendonly yes
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - payment-network
+    labels:
+      nginx.enable: "false"  # Cache should not be exposed via Nginx
+
+  # Beneficiaries Application
+  beneficiaries:
+    image: ghcr.io/alokkulkarni/beneficiaries:latest
+    container_name: beneficiaries-app
+    environment:
+      SERVER_PORT: 8080
+      SPRING_DATASOURCE_URL: jdbc:postgresql://beneficiaries-db:5432/beneficiaries
+      SPRING_DATASOURCE_USERNAME: postgres
+      SPRING_DATASOURCE_PASSWORD: postgres
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ""
+      HEALTH_DETAILS: always
+      LOG_LEVEL_ROOT: INFO
+      LOG_LEVEL_APP: INFO
+      LOG_LEVEL_JDBC: INFO
+      HIBERNATE_DDL_AUTO: update
+      TIMEZONE: UTC
+    ports:
+      - "${BENEFICIARIES_PORT:-8080}:8080"
+    depends_on:
+      beneficiaries-db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/actuator/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - payment-network
+    restart: unless-stopped
+    labels:
+      # Enable Nginx auto-configuration
+      nginx.enable: "true"
+      # URL path prefix - accessible at http://<ALB_or_IP>/dev/beneficiaries/*
+      nginx.path: "/dev/beneficiaries"
+      # Container internal port
+      nginx.port: "8080"
+
+  # Payment Processor Application
+  paymentprocessor:
+    image: ghcr.io/alokkulkarni/paymentprocessor:latest
+    container_name: paymentprocessor-app
+    environment:
+      SERVER_PORT: 8081
+      SPRING_DATASOURCE_URL: jdbc:postgresql://paymentprocessor-db:5432/paymentprocessor
+      SPRING_DATASOURCE_USERNAME: postgres
+      SPRING_DATASOURCE_PASSWORD: postgres
+      HEALTH_DETAILS: always
+      LOG_LEVEL_ROOT: INFO
+      LOG_LEVEL_APP: INFO
+      LOG_LEVEL_JDBC: INFO
+      HIBERNATE_DDL_AUTO: update
+      TIMEZONE: UTC
+    ports:
+      - "${PAYMENTPROCESSOR_PORT:-8081}:8081"
+    depends_on:
+      paymentprocessor-db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8081/actuator/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - payment-network
+    restart: unless-stopped
+    labels:
+      # Enable Nginx auto-configuration
+      nginx.enable: "true"
+      # URL path prefix - accessible at http://<ALB_or_IP>/dev/paymentprocessor/*
+      nginx.path: "/dev/paymentprocessor"
+      # Container internal port
+      nginx.port: "8081"
+
+  # Payment Consumer Application
+  paymentconsumer:
+    image: ghcr.io/alokkulkarni/paymentconsumer/paymentconsumer:latest
+    container_name: paymentconsumer-app
+    environment:
+      # Server Configuration
+      SERVER_PORT: 8082
+      # External service connection strings
+      BENEFICIARIES_SERVICE_URL: http://beneficiaries:8080
+      PAYMENT_PROCESSOR_SERVICE_URL: http://paymentprocessor:8081
+      # Spring Boot Configuration
+      SPRING_APPLICATION_NAME: paymentConsumer
+      SPRING_AUTOCONFIGURE_EXCLUDE: org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration,org.springframework.boot.autoconfigure.jdbc.DataSourceTransactionManagerAutoConfiguration
+      # Logging configuration
+      HEALTH_DETAILS: always
+      LOG_LEVEL_ROOT: INFO
+      LOG_LEVEL_APP: INFO
+      LOG_LEVEL_SPRING_WEB: INFO
+      TIMEZONE: UTC
+      # Actuator endpoints
+      ACTUATOR_ENDPOINTS: health,info,metrics,prometheus
+      PROMETHEUS_ENABLED: true
+      # Resilience4j Circuit Breaker (optional overrides)
+      # RESILIENCE4J_CIRCUITBREAKER_CONFIGS_DEFAULT_SLIDINGWINDOWSIZE: 10
+      # RESILIENCE4J_CIRCUITBREAKER_CONFIGS_DEFAULT_FAILURERATETHRESHOLD: 50
+    ports:
+      - "${PAYMENTCONSUMER_PORT:-8082}:8082"
+    depends_on:
+      beneficiaries:
+        condition: service_healthy
+      paymentprocessor:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8082/actuator/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - payment-network
+    restart: unless-stopped
+    labels:
+      # Enable Nginx auto-configuration
+      nginx.enable: "true"
+      # URL path prefix - accessible at http://<ALB_or_IP>/dev/paymentconsumer/*
+      nginx.path: "/dev/paymentconsumer"
+      # Container internal port
+      nginx.port: "8082"
+
+networks:
+  payment-network:
+    driver: bridge
+    name: payment-network
+    # For AWS infrastructure compatibility, you may want to use:
+    # external: true
+    # name: app-network
+
+volumes:
+  beneficiaries-db-data:
+    name: beneficiaries-db-data
+  paymentprocessor-db-data:
+    name: paymentprocessor-db-data
+  redis-data:
+    name: redis-data
