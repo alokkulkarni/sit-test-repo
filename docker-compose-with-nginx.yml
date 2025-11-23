@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   # PostgreSQL Database for beneficiaries
   beneficiaries-db:
@@ -196,8 +194,8 @@ services:
 
 networks:
   payment-network:
-    driver: bridge
-    name: app-network  # Must match network expected by AWS/Azure user-data scripts
+    external: true
+    name: app-network  # Use existing network created by EC2 user-data script
 
 volumes:
   beneficiaries-db-data:
