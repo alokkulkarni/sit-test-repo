@@ -1,4 +1,4 @@
-name: Generic SIT Environment Management
+name: Generic SIT Environment Management - Azure
 
 # This is a GENERIC workflow that can work with ANY docker-compose.yml file
 # It dynamically discovers services and their port mappings from the compose file
