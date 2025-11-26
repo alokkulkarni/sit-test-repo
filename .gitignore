@@ -1,0 +1,88 @@
+# Docker
+docker-compose.override.yml
+.docker/
+
+# Environment files
+.env
+.env.local
+.env.*.local
+*.env
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Runtime data
+pids/
+*.pid
+*.seed
+*.pid.lock
+
+# Test results
+test-results/
+coverage/
+*.lcov
+.nyc_output/
+
+# Performance test results
+performance-results/
+*.jmx
+*.jtl
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Build artifacts
+target/
+build/
+dist/
+out/
+
+# Score generated files
+.score-compose/
+state.yaml
+compose.yaml
+
+# Terraform
+*.tfstate
+*.tfstate.*
+.terraform/
+.terraform.lock.hcl
+terraform.tfvars
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# Secrets and credentials
+*.pem
+*.key
+*.crt
+*.p12
+*.jks
+secrets/
+credentials/
+
+# OS specific
+Thumbs.DB
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# Backup files
+*.bak
+*.backup
+*.old

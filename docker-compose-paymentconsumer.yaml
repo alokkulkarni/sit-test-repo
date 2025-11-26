@@ -1,0 +1,68 @@
+name: sit-test-repo
+services:
+  paymentconsumer-app:
+    annotations:
+      compose.score.dev/workload-name: paymentconsumer
+    depends_on:
+      wait-for-resources:
+        condition: service_completed_successfully
+        required: true
+    environment:
+      BENEFICIARIES_SERVICE_URL: http://localhost:8080
+      HEALTH_DETAILS: always
+      HIBERNATE_DDL_AUTO: update
+      LOG_LEVEL_APP: INFO
+      LOG_LEVEL_JDBC: INFO
+      LOG_LEVEL_ROOT: INFO
+      PAYMENT_PROCESSOR_SERVICE_URL: http://localhost:8081
+      SERVER_PORT: "8082"
+      SPRING_DATASOURCE_PASSWORD: postgres
+      SPRING_DATASOURCE_URL: jdbc:postgresql://paymentconsumer-db-db:5432/paymentConsumer
+      SPRING_DATASOURCE_USERNAME: postgres
+      TIMEZONE: UTC
+    hostname: paymentconsumer
+    image: ghcr.io/alokkulkarni/paymentconsumer/paymentconsumer:latest
+    networks:
+      - app-network
+    ports:
+      - 8082:8082
+  paymentconsumer-db-db:
+    environment:
+      POSTGRES_DB: paymentConsumer
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_USER: postgres
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U postgres -d paymentConsumer
+      timeout: 5s
+      interval: 10s
+      retries: 5
+    image: ghcr.io/alokkulkarni/testcontainers-registry/testcontainers/postgres:16-alpine
+    restart: always
+    volumes:
+      - type: volume
+        source: paymentconsumer-db-db-data
+        target: /var/lib/postgresql/data
+      - type: bind
+        source: ./paymentConsumer/init.db
+        target: /docker-entrypoint-initdb.d/init.sql
+    networks:
+      - app-network
+  wait-for-resources:
+    command:
+      - echo
+    depends_on:
+      paymentconsumer-db-db:
+        condition: service_healthy
+        required: true
+    image: alpine
+    networks:
+      - app-network
+volumes:
+  paymentconsumer-db-db-data:
+    driver: local
+networks:
+  app-network:
+    external: true
+    name: app-network

@@ -1,0 +1,129 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: beneficiaries
+  namespace: default
+  labels:
+    app: beneficiaries
+    app.kubernetes.io/name: beneficiaries
+    app.kubernetes.io/component: application
+    app.kubernetes.io/version: "1.0.0"
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: beneficiaries
+      component: application
+  template:
+    metadata:
+      labels:
+        app: beneficiaries
+        component: application
+        app.kubernetes.io/name: beneficiaries
+        app.kubernetes.io/component: application
+        app.kubernetes.io/version: "1.0.0"
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      serviceAccountName: default
+      containers:
+      - name: app
+        image: ghcr.io/alokkulkarni/beneficiaries:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 8080
+          name: http
+          protocol: TCP
+        env:
+        - name: SERVER_PORT
+          value: "8080"
+        - name: DB_NAME
+          valueFrom:
+            secretKeyRef:
+              name: beneficiaries-secret
+              key: DB_NAME
+        - name: SPRING_DATASOURCE_URL
+          value: "jdbc:postgresql://beneficiaries-db:5432/$(DB_NAME)"
+        - name: SPRING_DATASOURCE_USERNAME
+          valueFrom:
+            secretKeyRef:
+              name: beneficiaries-secret
+              key: DB_USERNAME
+        - name: SPRING_DATASOURCE_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: beneficiaries-secret
+              key: DB_PASSWORD
+        - name: SPRING_DATA_REDIS_HOST
+          value: "beneficiaries-redis"
+        - name: SPRING_DATA_REDIS_PORT
+          value: "6379"
+        - name: REDIS_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: beneficiaries-secret
+              key: REDIS_PASSWORD
+        envFrom:
+        - configMapRef:
+            name: beneficiaries-config
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          runAsUser: 1000
+        resources:
+          requests:
+            cpu: 200m
+            memory: 512Mi
+          limits:
+            cpu: 1000m
+            memory: 1Gi
+        livenessProbe:
+          httpGet:
+            path: /actuator/health/liveness
+            port: 8080
+            scheme: HTTP
+          initialDelaySeconds: 60
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /actuator/health/readiness
+            port: 8080
+            scheme: HTTP
+          initialDelaySeconds: 30
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+        startupProbe:
+          httpGet:
+            path: /actuator/health/liveness
+            port: 8080
+            scheme: HTTP
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 30
+        volumeMounts:
+        - name: tmp
+          mountPath: /tmp
+        - name: cache
+          mountPath: /app/cache
+      volumes:
+      - name: tmp
+        emptyDir: {}
+      - name: cache
+        emptyDir: {}

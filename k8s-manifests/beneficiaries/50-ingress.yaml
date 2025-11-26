@@ -1,0 +1,29 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: beneficiaries
+  namespace: default
+  labels:
+    app: beneficiaries
+    app.kubernetes.io/name: beneficiaries
+    app.kubernetes.io/component: application
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+spec:
+  ingressClassName: nginx
+  tls:
+  - hosts:
+    - beneficiaries.example.com
+    secretName: beneficiaries-tls
+  rules:
+  - host: beneficiaries.example.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: beneficiaries
+            port:
+              number: 80

@@ -1,0 +1,236 @@
+workloads:
+  beneficiaries:
+    resources:
+      score-workload:
+        type: score-workload
+        params:
+          metadata:
+            name: beneficiaries
+          containers:
+            main:
+              image: ghcr.io/alokkulkarni/beneficiaries:latest
+              variables:
+                SERVER_PORT: "8080"
+                SPRING_DATASOURCE_URL: "jdbc:postgresql://${resources.beneficiaries-db.outputs.host}:${resources.beneficiaries-db.outputs.port}/${resources.beneficiaries-db.outputs.name}"
+                SPRING_DATASOURCE_USERNAME: ${resources.beneficiaries-db.outputs.username}
+                SPRING_DATASOURCE_PASSWORD: ${resources.beneficiaries-db.outputs.password}
+                REDIS_HOST: ${resources.redis.outputs.host}
+                REDIS_PORT: ${resources.redis.outputs.port}
+                REDIS_PASSWORD: ""
+                HEALTH_DETAILS: always
+                LOG_LEVEL_ROOT: INFO
+                LOG_LEVEL_APP: INFO
+                LOG_LEVEL_JDBC: INFO
+                HIBERNATE_DDL_AUTO: update
+                TIMEZONE: UTC
+              resources:
+                limits:
+                  memory: 1Gi
+                  cpu: "1.0"
+                requests:
+                  memory: 512Mi
+                  cpu: "0.5"
+              livenessProbe:
+                httpGet:
+                  path: /actuator/health
+                  port: 8080
+                initialDelaySeconds: 40
+                periodSeconds: 30
+                timeoutSeconds: 10
+                failureThreshold: 3
+              readinessProbe:
+                httpGet:
+                  path: /actuator/health
+                  port: 8080
+                initialDelaySeconds: 30
+                periodSeconds: 10
+                timeoutSeconds: 5
+                failureThreshold: 3
+          service:
+            ports:
+              http:
+                port: 8080
+                protocol: TCP
+          labels:
+            nginx.enable: "true"
+            nginx.path: "/dev/beneficiaries"
+            nginx.port: "8080"
+      beneficiaries-db:
+        type: postgres
+        params:
+          database: beneficiaries
+          username: postgres
+          init-script: ./beneficiaries/init.db
+
+  paymentprocessor:
+    resources:
+      score-workload:
+        type: score-workload
+        params:
+          metadata:
+            name: paymentprocessor
+          containers:
+            main:
+              image: ghcr.io/alokkulkarni/paymentprocessor:latest
+              variables:
+                SERVER_PORT: "8081"
+                SPRING_DATASOURCE_URL: "jdbc:postgresql://${resources.paymentprocessor-db.outputs.host}:${resources.paymentprocessor-db.outputs.port}/${resources.paymentprocessor-db.outputs.name}"
+                SPRING_DATASOURCE_USERNAME: ${resources.paymentprocessor-db.outputs.username}
+                SPRING_DATASOURCE_PASSWORD: ${resources.paymentprocessor-db.outputs.password}
+                HEALTH_DETAILS: always
+                LOG_LEVEL_ROOT: INFO
+                LOG_LEVEL_APP: INFO
+                LOG_LEVEL_JDBC: INFO
+                HIBERNATE_DDL_AUTO: update
+                TIMEZONE: UTC
+              resources:
+                limits:
+                  memory: 1Gi
+                  cpu: "1.0"
+                requests:
+                  memory: 512Mi
+                  cpu: "0.5"
+              livenessProbe:
+                httpGet:
+                  path: /actuator/health
+                  port: 8081
+                initialDelaySeconds: 40
+                periodSeconds: 30
+                timeoutSeconds: 10
+                failureThreshold: 3
+              readinessProbe:
+                httpGet:
+                  path: /actuator/health
+                  port: 8081
+                initialDelaySeconds: 30
+                periodSeconds: 10
+                timeoutSeconds: 5
+                failureThreshold: 3
+          service:
+            ports:
+              http:
+                port: 8081
+                protocol: TCP
+          labels:
+            nginx.enable: "true"
+            nginx.path: "/dev/paymentprocessor"
+            nginx.port: "8081"
+      paymentprocessor-db:
+        type: postgres
+        params:
+          database: paymentprocessor
+          username: postgres
+          init-script: ./paymentprocessor/init.sql
+
+  paymentconsumer:
+    resources:
+      score-workload:
+        type: score-workload
+        params:
+          metadata:
+            name: paymentconsumer
+          containers:
+            main:
+              image: ghcr.io/alokkulkarni/paymentconsumer/paymentconsumer:latest
+              variables:
+                SERVER_PORT: "8082"
+                BENEFICIARIES_SERVICE_URL: "http://beneficiaries:8080"
+                PAYMENT_PROCESSOR_SERVICE_URL: "http://paymentprocessor:8081"
+                SPRING_APPLICATION_NAME: paymentConsumer
+                SPRING_AUTOCONFIGURE_EXCLUDE: "org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration,org.springframework.boot.autoconfigure.jdbc.DataSourceTransactionManagerAutoConfiguration"
+                HEALTH_DETAILS: always
+                LOG_LEVEL_ROOT: INFO
+                LOG_LEVEL_APP: INFO
+                LOG_LEVEL_SPRING_WEB: INFO
+                TIMEZONE: UTC
+                ACTUATOR_ENDPOINTS: "health,info,metrics,prometheus"
+                PROMETHEUS_ENABLED: "true"
+              resources:
+                limits:
+                  memory: 1Gi
+                  cpu: "1.0"
+                requests:
+                  memory: 512Mi
+                  cpu: "0.5"
+              livenessProbe:
+                httpGet:
+                  path: /actuator/health
+                  port: 8082
+                initialDelaySeconds: 40
+                periodSeconds: 30
+                timeoutSeconds: 10
+                failureThreshold: 3
+              readinessProbe:
+                httpGet:
+                  path: /actuator/health
+                  port: 8082
+                initialDelaySeconds: 30
+                periodSeconds: 10
+                timeoutSeconds: 5
+                failureThreshold: 3
+          service:
+            ports:
+              http:
+                port: 8082
+                protocol: TCP
+          labels:
+            nginx.enable: "true"
+            nginx.path: "/dev/paymentconsumer"
+            nginx.port: "8082"
+
+  nginx:
+    resources:
+      score-workload:
+        type: score-workload
+        params:
+          metadata:
+            name: nginx
+          containers:
+            main:
+              image: nginx:alpine
+              resources:
+                limits:
+                  memory: 256Mi
+                  cpu: "0.5"
+                requests:
+                  memory: 128Mi
+                  cpu: "0.25"
+              livenessProbe:
+                httpGet:
+                  path: /health
+                  port: 80
+                initialDelaySeconds: 10
+                periodSeconds: 10
+                timeoutSeconds: 5
+                failureThreshold: 3
+              readinessProbe:
+                httpGet:
+                  path: /health
+                  port: 80
+                initialDelaySeconds: 5
+                periodSeconds: 5
+                timeoutSeconds: 3
+                failureThreshold: 2
+              files:
+                - target: /etc/nginx/nginx.conf
+                  mode: "0644"
+                  source: ${resources.nginx-config.outputs.content}
+          service:
+            ports:
+              http:
+                port: 80
+                protocol: TCP
+          labels:
+            description: "Nginx reverse proxy for routing traffic to backend services"
+            routing.paths: "/dev/beneficiaries,/dev/paymentprocessor,/dev/paymentconsumer"
+      nginx-config:
+        type: config
+        params:
+          source: ./nginx.conf
+
+# Shared resources that can be referenced by workloads
+resources:
+  redis:
+    type: redis
+    params:
+      appendonly: "yes"

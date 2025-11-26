@@ -1,0 +1,287 @@
+name: sit-test-repo
+services:
+    beneficiaries-beneficiaries:
+        annotations:
+            compose.score.dev/workload-name: beneficiaries
+        depends_on:
+            wait-for-resources:
+                condition: service_completed_successfully
+                required: true
+        environment:
+            HEALTH_DETAILS: always
+            HIBERNATE_DDL_AUTO: update
+            LOG_LEVEL_APP: INFO
+            LOG_LEVEL_JDBC: INFO
+            LOG_LEVEL_ROOT: INFO
+            REDIS_PASSWORD: $${resources.redis.password}
+            SERVER_PORT: "8080"
+            SPRING_DATA_REDIS_HOST: redis-rnMrOH
+            SPRING_DATA_REDIS_PORT: "6379"
+            SPRING_DATASOURCE_PASSWORD: postgres
+            SPRING_DATASOURCE_URL: jdbc:postgresql://beneficiaries-beneficiaries-db-db:5432/beneficiaries
+            SPRING_DATASOURCE_USERNAME: postgres
+            TIMEZONE: UTC
+        hostname: beneficiaries
+        image: ghcr.io/${GITHUB_USER}/beneficiaries:latest
+    beneficiaries-beneficiaries-db-db:
+        environment:
+            POSTGRES_DB: beneficiaries
+            POSTGRES_PASSWORD: postgres
+            POSTGRES_USER: postgres
+        healthcheck:
+            test:
+                - CMD-SHELL
+                - pg_isready -U postgres -d beneficiaries
+            timeout: 5s
+            interval: 10s
+            retries: 5
+        image: ghcr.io/alokkulkarni/testcontainers-registry/testcontainers/postgres:16-alpine
+        restart: always
+        volumes:
+            - type: volume
+              source: beneficiaries-beneficiaries-db-db-data
+              target: /var/lib/postgresql/data
+            - type: bind
+              source: ./beneficiaries/src/main/resources/schema.sql
+              target: /docker-entrypoint-initdb.d/init.sql
+    payment-system-beneficiaries:
+        annotations:
+            compose.score.dev/workload-name: payment-system
+        depends_on:
+            wait-for-resources:
+                condition: service_completed_successfully
+                required: true
+        environment:
+            HEALTH_DETAILS: always
+            HIBERNATE_DDL_AUTO: update
+            LOG_LEVEL_APP: INFO
+            LOG_LEVEL_JDBC: INFO
+            LOG_LEVEL_ROOT: INFO
+            REDIS_HOST: redis-Osj6pQ
+            REDIS_PASSWORD: ""
+            REDIS_PORT: "6379"
+            SERVER_PORT: "8080"
+            SPRING_DATASOURCE_PASSWORD: postgres
+            SPRING_DATASOURCE_URL: jdbc:postgresql://payment-system-beneficiaries-db-db:5432/beneficiaries
+            SPRING_DATASOURCE_USERNAME: postgres
+            TIMEZONE: UTC
+        hostname: payment-system
+        image: ghcr.io/alokkulkarni/beneficiaries:latest
+    payment-system-beneficiaries-db-db:
+        environment:
+            POSTGRES_DB: beneficiaries
+            POSTGRES_PASSWORD: postgres
+            POSTGRES_USER: postgres
+        healthcheck:
+            test:
+                - CMD-SHELL
+                - pg_isready -U postgres -d beneficiaries
+            timeout: 5s
+            interval: 10s
+            retries: 5
+        image: ghcr.io/alokkulkarni/testcontainers-registry/testcontainers/postgres:16-alpine
+        restart: always
+        volumes:
+            - type: volume
+              source: payment-system-beneficiaries-db-db-data
+              target: /var/lib/postgresql/data
+            - type: bind
+              source: ./beneficiaries/init.db
+              target: /docker-entrypoint-initdb.d/init.sql
+    payment-system-nginx:
+        annotations:
+            compose.score.dev/workload-name: payment-system
+        depends_on:
+            wait-for-resources:
+                condition: service_completed_successfully
+                required: true
+        image: nginx:alpine
+        network_mode: service:payment-system-beneficiaries
+        volumes:
+            - type: bind
+              source: .score-compose/mounts/files/payment-system-files-nginx.conf
+              target: /etc/nginx/nginx.conf
+    payment-system-paymentconsumer:
+        annotations:
+            compose.score.dev/workload-name: payment-system
+        depends_on:
+            wait-for-resources:
+                condition: service_completed_successfully
+                required: true
+        environment:
+            ACTUATOR_ENDPOINTS: health,info,metrics,prometheus
+            BENEFICIARIES_SERVICE_URL: http://beneficiaries:8080
+            HEALTH_DETAILS: always
+            LOG_LEVEL_APP: INFO
+            LOG_LEVEL_ROOT: INFO
+            LOG_LEVEL_SPRING_WEB: INFO
+            PAYMENT_PROCESSOR_SERVICE_URL: http://paymentprocessor:8081
+            PROMETHEUS_ENABLED: "true"
+            SERVER_PORT: "8082"
+            SPRING_APPLICATION_NAME: paymentConsumer
+            SPRING_AUTOCONFIGURE_EXCLUDE: org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration,org.springframework.boot.autoconfigure.jdbc.DataSourceTransactionManagerAutoConfiguration
+            TIMEZONE: UTC
+        image: ghcr.io/alokkulkarni/paymentconsumer/paymentconsumer:latest
+        network_mode: service:payment-system-beneficiaries
+    payment-system-paymentprocessor:
+        annotations:
+            compose.score.dev/workload-name: payment-system
+        depends_on:
+            wait-for-resources:
+                condition: service_completed_successfully
+                required: true
+        environment:
+            HEALTH_DETAILS: always
+            HIBERNATE_DDL_AUTO: update
+            LOG_LEVEL_APP: INFO
+            LOG_LEVEL_JDBC: INFO
+            LOG_LEVEL_ROOT: INFO
+            SERVER_PORT: "8081"
+            SPRING_DATASOURCE_PASSWORD: postgres
+            SPRING_DATASOURCE_URL: jdbc:postgresql://payment-system-paymentprocessor-db-db:5432/paymentprocessor
+            SPRING_DATASOURCE_USERNAME: postgres
+            TIMEZONE: UTC
+        image: ghcr.io/alokkulkarni/paymentprocessor:latest
+        network_mode: service:payment-system-beneficiaries
+    payment-system-paymentprocessor-db-db:
+        environment:
+            POSTGRES_DB: paymentprocessor
+            POSTGRES_PASSWORD: postgres
+            POSTGRES_USER: postgres
+        healthcheck:
+            test:
+                - CMD-SHELL
+                - pg_isready -U postgres -d paymentprocessor
+            timeout: 5s
+            interval: 10s
+            retries: 5
+        image: ghcr.io/alokkulkarni/testcontainers-registry/testcontainers/postgres:16-alpine
+        restart: always
+        volumes:
+            - type: volume
+              source: payment-system-paymentprocessor-db-db-data
+              target: /var/lib/postgresql/data
+            - type: bind
+              source: ./paymentprocessor/init.sql
+              target: /docker-entrypoint-initdb.d/init.sql
+    paymentprocessor-paymentprocessor:
+        annotations:
+            compose.score.dev/workload-name: paymentprocessor
+        depends_on:
+            wait-for-resources:
+                condition: service_completed_successfully
+                required: true
+        environment:
+            HEALTH_DETAILS: always
+            HIBERNATE_DDL_AUTO: update
+            LOG_LEVEL_APP: INFO
+            LOG_LEVEL_JDBC: INFO
+            LOG_LEVEL_ROOT: INFO
+            SERVER_PORT: "8081"
+            SPRING_DATASOURCE_PASSWORD: postgres
+            SPRING_DATASOURCE_URL: jdbc:postgresql://paymentprocessor-paymentprocessor-db-db:5432/paymentprocessor
+            SPRING_DATASOURCE_USERNAME: postgres
+            TIMEZONE: UTC
+        hostname: paymentprocessor
+        image: ghcr.io/${GITHUB_USER}/paymentprocessor:latest
+    paymentprocessor-paymentprocessor-db-db:
+        environment:
+            POSTGRES_DB: paymentprocessor
+            POSTGRES_PASSWORD: postgres
+            POSTGRES_USER: postgres
+        healthcheck:
+            test:
+                - CMD-SHELL
+                - pg_isready -U postgres -d paymentprocessor
+            timeout: 5s
+            interval: 10s
+            retries: 5
+        image: ghcr.io/alokkulkarni/testcontainers-registry/testcontainers/postgres:16-alpine
+        restart: always
+        volumes:
+            - type: volume
+              source: paymentprocessor-paymentprocessor-db-db-data
+              target: /var/lib/postgresql/data
+            - type: bind
+              source: ./paymentprocessor/src/main/resources/schema.sql
+              target: /docker-entrypoint-initdb.d/init.sql
+    redis-Osj6pQ:
+        command:
+            - /usr/local/etc/redis/redis.conf
+        entrypoint:
+            - redis-server
+        image: mirror.gcr.io/redis:7-alpine
+        labels:
+            dev.score.compose.res.uid: redis.default#payment-system.redis
+        restart: always
+        volumes:
+            - type: bind
+              source: .score-compose/mounts/redis-Osj6pQ/redis.conf
+              target: /usr/local/etc/redis/redis.conf
+              read_only: true
+            - type: volume
+              source: redis-Osj6pQ-data
+              target: /data
+              volume:
+                nocopy: true
+    redis-rnMrOH:
+        command:
+            - /usr/local/etc/redis/redis.conf
+        entrypoint:
+            - redis-server
+        image: mirror.gcr.io/redis:7-alpine
+        labels:
+            dev.score.compose.res.uid: redis.default#beneficiaries.redis
+        restart: always
+        volumes:
+            - type: bind
+              source: .score-compose/mounts/redis-rnMrOH/redis.conf
+              target: /usr/local/etc/redis/redis.conf
+              read_only: true
+            - type: volume
+              source: redis-rnMrOH-data
+              target: /data
+              volume:
+                nocopy: true
+    wait-for-resources:
+        command:
+            - echo
+        depends_on:
+            beneficiaries-beneficiaries-db-db:
+                condition: service_healthy
+                required: true
+            payment-system-beneficiaries-db-db:
+                condition: service_healthy
+                required: true
+            payment-system-paymentprocessor-db-db:
+                condition: service_healthy
+                required: true
+            paymentprocessor-paymentprocessor-db-db:
+                condition: service_healthy
+                required: true
+            redis-Osj6pQ:
+                condition: service_started
+                required: true
+            redis-rnMrOH:
+                condition: service_started
+                required: true
+        image: alpine
+volumes:
+    beneficiaries-beneficiaries-db-db-data:
+        driver: local
+    payment-system-beneficiaries-db-db-data:
+        driver: local
+    payment-system-paymentprocessor-db-db-data:
+        driver: local
+    paymentprocessor-paymentprocessor-db-db-data:
+        driver: local
+    redis-Osj6pQ-data:
+        name: redis-Osj6pQ-data
+        driver: local
+        labels:
+            dev.score.compose.res.uid: redis.default#payment-system.redis
+    redis-rnMrOH-data:
+        name: redis-rnMrOH-data
+        driver: local
+        labels:
+            dev.score.compose.res.uid: redis.default#beneficiaries.redis

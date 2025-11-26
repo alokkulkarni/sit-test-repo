@@ -1,0 +1,29 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: paymentprocessor
+  namespace: default
+  labels:
+    app: paymentprocessor
+    app.kubernetes.io/name: paymentprocessor
+    app.kubernetes.io/component: application
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+spec:
+  ingressClassName: nginx
+  tls:
+  - hosts:
+    - paymentprocessor.example.com
+    secretName: paymentprocessor-tls
+  rules:
+  - host: paymentprocessor.example.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: paymentprocessor
+            port:
+              number: 80

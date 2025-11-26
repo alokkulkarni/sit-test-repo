@@ -1,0 +1,15 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: paymentprocessor
+  namespace: default
+  labels:
+    app: paymentprocessor
+    app.kubernetes.io/name: paymentprocessor
+    app.kubernetes.io/component: application
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: paymentprocessor
+      component: application

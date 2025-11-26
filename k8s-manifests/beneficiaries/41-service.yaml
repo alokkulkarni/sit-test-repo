@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: beneficiaries
+  namespace: default
+  labels:
+    app: beneficiaries
+    app.kubernetes.io/name: beneficiaries
+    app.kubernetes.io/component: application
+spec:
+  type: ClusterIP
+  ports:
+  - port: 80
+    targetPort: 8080
+    protocol: TCP
+    name: http
+  selector:
+    app: beneficiaries
+    component: application

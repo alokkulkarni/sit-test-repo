@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: beneficiaries-config
+  namespace: default
+  labels:
+    app: beneficiaries
+    app.kubernetes.io/name: beneficiaries
+    app.kubernetes.io/component: config
+data:
+  SERVER_PORT: "8080"
+  HEALTH_DETAILS: "always"
+  LOG_LEVEL_ROOT: "INFO"
+  LOG_LEVEL_APP: "INFO"
+  LOG_LEVEL_JDBC: "INFO"
+  HIBERNATE_DDL_AUTO: "update"
+  TIMEZONE: "UTC"

@@ -1,0 +1,15 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: paymentconsumer
+  namespace: default
+  labels:
+    app: paymentconsumer
+    app.kubernetes.io/name: paymentconsumer
+    app.kubernetes.io/component: application
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: paymentconsumer
+      component: application

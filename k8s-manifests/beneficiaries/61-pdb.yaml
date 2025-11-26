@@ -1,0 +1,15 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: beneficiaries
+  namespace: default
+  labels:
+    app: beneficiaries
+    app.kubernetes.io/name: beneficiaries
+    app.kubernetes.io/component: application
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: beneficiaries
+      component: application

@@ -1,0 +1,29 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: paymentconsumer
+  namespace: default
+  labels:
+    app: paymentconsumer
+    app.kubernetes.io/name: paymentconsumer
+    app.kubernetes.io/component: application
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+spec:
+  ingressClassName: nginx
+  tls:
+  - hosts:
+    - paymentconsumer.example.com
+    secretName: paymentconsumer-tls
+  rules:
+  - host: paymentconsumer.example.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: paymentconsumer
+            port:
+              number: 80

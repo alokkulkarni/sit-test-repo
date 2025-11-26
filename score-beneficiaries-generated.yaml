@@ -1,0 +1,41 @@
+apiVersion: score.dev/v1b1
+
+metadata:
+  name: beneficiaries
+
+containers:
+  app:
+    image: ghcr.io/alokkulkarni/beneficiaries:latest
+    variables:
+      SERVER_PORT: "8080"
+      SPRING_DATASOURCE_URL: "jdbc:postgresql://${resources.db.host}:${resources.db.port}/${resources.db.name}"
+      SPRING_DATASOURCE_USERNAME: ${resources.db.username}
+      SPRING_DATASOURCE_PASSWORD: ${resources.db.password}
+      SPRING_DATA_REDIS_HOST: ${resources.redis.host}
+      SPRING_DATA_REDIS_PORT: ${resources.redis.port}
+      REDIS_PASSWORD: $${resources.redis.password}
+      HEALTH_DETAILS: always
+      LOG_LEVEL_ROOT: INFO
+      LOG_LEVEL_APP: INFO
+      LOG_LEVEL_JDBC: INFO
+      HIBERNATE_DDL_AUTO: update
+      TIMEZONE: UTC
+
+service:
+  ports:
+    app:
+      port: 8080
+      targetPort: 8080
+      protocol: TCP
+
+resources:
+  db:
+    type: postgres
+    metadata:
+      annotations:
+        database: beneficiaries
+        username: postgres
+        password: postgres
+        init-script: ./beneficiaries/init.db
+  redis:
+    type: redis

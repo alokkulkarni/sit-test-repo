@@ -1,0 +1,66 @@
+name: sit-test-repo
+services:
+  paymentprocessor-app:
+    annotations:
+      compose.score.dev/workload-name: paymentprocessor
+    depends_on:
+      wait-for-resources:
+        condition: service_completed_successfully
+        required: true
+    environment:
+      HEALTH_DETAILS: always
+      HIBERNATE_DDL_AUTO: update
+      LOG_LEVEL_APP: INFO
+      LOG_LEVEL_JDBC: INFO
+      LOG_LEVEL_ROOT: INFO
+      SERVER_PORT: "8081"
+      SPRING_DATASOURCE_PASSWORD: postgres
+      SPRING_DATASOURCE_URL: jdbc:postgresql://paymentprocessor-db-db:5432/paymentprocessor
+      SPRING_DATASOURCE_USERNAME: postgres
+      TIMEZONE: UTC
+    hostname: paymentprocessor
+    image: ghcr.io/alokkulkarni/paymentprocessor:latest
+    networks:
+      - app-network
+    ports:
+      - 8081:8081
+  paymentprocessor-db-db:
+    environment:
+      POSTGRES_DB: paymentprocessor
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_USER: postgres
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U postgres -d paymentprocessor
+      timeout: 5s
+      interval: 10s
+      retries: 5
+    image: ghcr.io/alokkulkarni/testcontainers-registry/testcontainers/postgres:16-alpine
+    restart: always
+    volumes:
+      - type: volume
+        source: paymentprocessor-db-db-data
+        target: /var/lib/postgresql/data
+      - type: bind
+        source: ./paymentprocessor/init.sql
+        target: /docker-entrypoint-initdb.d/init.sql
+    networks:
+      - app-network
+  wait-for-resources:
+    command:
+      - echo
+    depends_on:
+      paymentprocessor-db-db:
+        condition: service_healthy
+        required: true
+    image: alpine
+    networks:
+      - app-network
+volumes:
+  paymentprocessor-db-db-data:
+    driver: local
+networks:
+  app-network:
+    external: true
+    name: app-network

@@ -1,0 +1,66 @@
+apiVersion: score.dev/v1b1
+
+metadata:
+  name: nginx
+
+containers:
+  main:
+    image: nginx:alpine
+    files:
+      - target: /etc/nginx/nginx.conf
+        mode: "0644"
+        content: |
+          events {
+              worker_connections 1024;
+          }
+          
+          http {
+              upstream beneficiaries {
+                  server beneficiaries:8080;
+              }
+              
+              upstream paymentprocessor {
+                  server paymentprocessor:8081;
+              }
+              
+              upstream paymentconsumer {
+                  server paymentconsumer:8082;
+              }
+              
+              server {
+                  listen 80;
+                  
+                  location /health {
+                      return 200 "OK\n";
+                      add_header Content-Type text/plain;
+                  }
+                  
+                  location /dev/beneficiaries/ {
+                      proxy_pass http://beneficiaries/;
+                      proxy_set_header Host $host;
+                      proxy_set_header X-Real-IP $remote_addr;
+                      proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                  }
+                  
+                  location /dev/paymentprocessor/ {
+                      proxy_pass http://paymentprocessor/;
+                      proxy_set_header Host $host;
+                      proxy_set_header X-Real-IP $remote_addr;
+                      proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                  }
+                  
+                  location /dev/paymentconsumer/ {
+                      proxy_pass http://paymentconsumer/;
+                      proxy_set_header Host $host;
+                      proxy_set_header X-Real-IP $remote_addr;
+                      proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                  }
+              }
+          }
+
+service:
+  ports:
+    http:
+      port: 80
+      targetPort: 80
+      protocol: tcp

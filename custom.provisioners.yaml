@@ -1,0 +1,68 @@
+# Custom postgres provisioner that creates SEPARATE postgres instances (not shared)
+# Uses the 'database' annotation from metadata for the database name
+- uri: template://custom-provisioners/postgres
+  type: postgres
+  description: Provisions a dedicated PostgreSQL instance per database (not shared).
+  init: |
+    # Use the resource ID to create a unique service name per database
+    serviceName: {{ .Id | replace "." "-" }}-db
+    # Use the database annotation if provided, otherwise generate a random one
+    databaseName: {{ dig "annotations" "database" (printf "db-%s" (randAlpha 8)) .Metadata | quote }}
+    randomUsername: {{ dig "annotations" "username" "postgres" .Metadata | quote }}
+    randomPassword: {{ dig "annotations" "password" (randAlphaNum 16) .Metadata | quote }}
+    publishPort: {{ dig "annotations" "compose.score.dev/publish-port" "0" .Metadata | quote }}
+    initScript: {{ dig "annotations" "init-script" "" .Metadata | quote }}
+  state: |
+    serviceName: {{ dig "serviceName" .Init.serviceName .State | quote }}
+    database: {{ dig "database" .Init.databaseName .State | quote }}
+    username: {{ dig "username" .Init.randomUsername .State | quote }}
+    password: {{ dig "password" .Init.randomPassword .State | quote }}
+  outputs: |
+    host: {{ .State.serviceName }}
+    port: 5432
+    name: {{ .State.database }}
+    database: {{ .State.database }}
+    username: {{ .State.username }}
+    password: {{ .State.password }}
+  volumes: |
+    {{ .State.serviceName }}-data:
+      driver: local
+  services: |
+    {{ .State.serviceName }}:
+      image: ghcr.io/alokkulkarni/testcontainers-registry/testcontainers/postgres:16-alpine
+      restart: always
+      environment:
+        POSTGRES_DB: {{ .State.database }}
+        POSTGRES_USER: {{ .State.username }}
+        POSTGRES_PASSWORD: {{ .State.password | quote }}
+      {{ if ne .Init.publishPort "0" }}
+      ports:
+      - target: 5432
+        published: {{ .Init.publishPort }}
+      {{ end }}
+      volumes:
+      - type: volume
+        source: {{ .State.serviceName }}-data
+        target: /var/lib/postgresql/data
+      {{ if ne .Init.initScript "" }}
+      - type: bind
+        source: {{ .Init.initScript }}
+        target: /docker-entrypoint-initdb.d/init.sql
+      {{ end }}
+      healthcheck:
+        test: ["CMD-SHELL", "pg_isready -U {{ .State.username }} -d {{ .State.database }}"]
+        interval: 10s
+        timeout: 5s
+        retries: 5
+  info_logs: |
+    - "{{.Uid}}: To connect to postgres: \"docker run -it --network {{ .ComposeProjectName }}_default --rm postgres:16-alpine psql -h {{ .State.serviceName }} -U {{ .State.username }} --dbname {{ .State.database }}\""
+    {{ if ne .Init.publishPort "0" }}
+    - "{{.Uid}}: Or connect your postgres client to \"postgres://{{ .State.username }}:{{ .State.password }}@localhost:{{ .Init.publishPort }}/{{ .State.database }}\""
+    {{ end }}
+  expected_outputs:
+    - host
+    - port
+    - name
+    - database
+    - username
+    - password

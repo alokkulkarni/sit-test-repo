@@ -1,0 +1,147 @@
+apiVersion: score.dev/v1b1
+
+metadata:
+  name: payment-system
+
+containers:
+  beneficiaries:
+    image: ghcr.io/alokkulkarni/beneficiaries:latest
+    variables:
+      SERVER_PORT: "8080"
+      SPRING_DATASOURCE_URL: "jdbc:postgresql://${resources.beneficiaries-db.host}:${resources.beneficiaries-db.port}/${resources.beneficiaries-db.name}"
+      SPRING_DATASOURCE_USERNAME: ${resources.beneficiaries-db.username}
+      SPRING_DATASOURCE_PASSWORD: ${resources.beneficiaries-db.password}
+      REDIS_HOST: ${resources.redis.host}
+      REDIS_PORT: ${resources.redis.port}
+      REDIS_PASSWORD: ""
+      HEALTH_DETAILS: always
+      LOG_LEVEL_ROOT: INFO
+      LOG_LEVEL_APP: INFO
+      LOG_LEVEL_JDBC: INFO
+      HIBERNATE_DDL_AUTO: update
+      TIMEZONE: UTC
+
+  paymentprocessor:
+    image: ghcr.io/alokkulkarni/paymentprocessor:latest
+    variables:
+      SERVER_PORT: "8081"
+      SPRING_DATASOURCE_URL: "jdbc:postgresql://${resources.paymentprocessor-db.host}:${resources.paymentprocessor-db.port}/${resources.paymentprocessor-db.name}"
+      SPRING_DATASOURCE_USERNAME: ${resources.paymentprocessor-db.username}
+      SPRING_DATASOURCE_PASSWORD: ${resources.paymentprocessor-db.password}
+      HEALTH_DETAILS: always
+      LOG_LEVEL_ROOT: INFO
+      LOG_LEVEL_APP: INFO
+      LOG_LEVEL_JDBC: INFO
+      HIBERNATE_DDL_AUTO: update
+      TIMEZONE: UTC
+
+  paymentconsumer:
+    image: ghcr.io/alokkulkarni/paymentconsumer/paymentconsumer:latest
+    variables:
+      SERVER_PORT: "8082"
+      BENEFICIARIES_SERVICE_URL: "http://beneficiaries:8080"
+      PAYMENT_PROCESSOR_SERVICE_URL: "http://paymentprocessor:8081"
+      SPRING_APPLICATION_NAME: paymentConsumer
+      SPRING_AUTOCONFIGURE_EXCLUDE: "org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration,org.springframework.boot.autoconfigure.jdbc.DataSourceTransactionManagerAutoConfiguration"
+      HEALTH_DETAILS: always
+      LOG_LEVEL_ROOT: INFO
+      LOG_LEVEL_APP: INFO
+      LOG_LEVEL_SPRING_WEB: INFO
+      TIMEZONE: UTC
+      ACTUATOR_ENDPOINTS: "health,info,metrics,prometheus"
+      PROMETHEUS_ENABLED: "true"
+
+  nginx:
+    image: nginx:alpine
+    files:
+      - target: /etc/nginx/nginx.conf
+        mode: "0644"
+        content: |
+          events {
+              worker_connections 1024;
+          }
+          
+          http {
+              upstream beneficiaries {
+                  server beneficiaries:8080;
+              }
+              
+              upstream paymentprocessor {
+                  server paymentprocessor:8081;
+              }
+              
+              upstream paymentconsumer {
+                  server paymentconsumer:8082;
+              }
+              
+              server {
+                  listen 80;
+                  
+                  location /health {
+                      return 200 "OK\n";
+                      add_header Content-Type text/plain;
+                  }
+                  
+                  location /dev/beneficiaries/ {
+                      proxy_pass http://beneficiaries/;
+                      proxy_set_header Host $host;
+                      proxy_set_header X-Real-IP $remote_addr;
+                      proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                  }
+                  
+                  location /dev/paymentprocessor/ {
+                      proxy_pass http://paymentprocessor/;
+                      proxy_set_header Host $host;
+                      proxy_set_header X-Real-IP $remote_addr;
+                      proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                  }
+                  
+                  location /dev/paymentconsumer/ {
+                      proxy_pass http://paymentconsumer/;
+                      proxy_set_header Host $host;
+                      proxy_set_header X-Real-IP $remote_addr;
+                      proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                  }
+              }
+          }
+
+service:
+  ports:
+    beneficiaries:
+      port: 8080
+      targetPort: 8080
+      protocol: TCP
+    paymentprocessor:
+      port: 8081
+      targetPort: 8081
+      protocol: TCP
+    paymentconsumer:
+      port: 8082
+      targetPort: 8082
+      protocol: TCP
+    nginx:
+      port: 80
+      targetPort: 80
+      protocol: TCP
+
+resources:
+  beneficiaries-db:
+    type: postgres
+    metadata:
+      annotations:
+        database: beneficiaries
+        username: postgres
+        password: postgres
+        init-script: ./beneficiaries/init.db
+        
+  paymentprocessor-db:
+    type: postgres
+    metadata:
+      annotations:
+        database: paymentprocessor
+        username: postgres
+        password: postgres
+        init-script: ./paymentprocessor/init.sql
+        
+  redis:
+    type: redis

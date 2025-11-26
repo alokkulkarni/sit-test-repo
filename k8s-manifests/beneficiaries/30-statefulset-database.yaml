@@ -1,0 +1,145 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: beneficiaries-db
+  namespace: default
+  labels:
+    app: beneficiaries
+    app.kubernetes.io/name: beneficiaries
+    app.kubernetes.io/component: database
+spec:
+  serviceName: beneficiaries-db
+  replicas: 1
+  selector:
+    matchLabels:
+      app: beneficiaries
+      component: database
+  template:
+    metadata:
+      labels:
+        app: beneficiaries
+        component: database
+        app.kubernetes.io/name: beneficiaries
+        app.kubernetes.io/component: database
+    spec:
+      securityContext:
+        fsGroup: 999
+        runAsUser: 999
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+      - name: init-db-schema
+        image: postgres:16-alpine
+        imagePullPolicy: IfNotPresent
+        command:
+        - /bin/sh
+        - -c
+        - |
+          echo "Waiting for database to be ready..."
+          until pg_isready -U $POSTGRES_USER -d $POSTGRES_DB; do
+            echo "Database not ready, waiting..."
+            sleep 2
+          done
+          echo "Database ready, running init script..."
+          psql -U $POSTGRES_USER -d $POSTGRES_DB -f /docker-entrypoint-initdb.d/init.sql
+          echo "Init script completed successfully"
+        env:
+        - name: POSTGRES_DB
+          valueFrom:
+            secretKeyRef:
+              name: beneficiaries-secret
+              key: DB_NAME
+        - name: POSTGRES_USER
+          valueFrom:
+            secretKeyRef:
+              name: beneficiaries-secret
+              key: DB_USERNAME
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: beneficiaries-secret
+              key: DB_PASSWORD
+        - name: PGPASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: beneficiaries-secret
+              key: DB_PASSWORD
+        volumeMounts:
+        - name: init-script
+          mountPath: /docker-entrypoint-initdb.d
+          readOnly: true
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: false
+      containers:
+      - name: database
+        image: postgres:16-alpine
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 5432
+          name: db
+          protocol: TCP
+        env:
+        - name: POSTGRES_DB
+          valueFrom:
+            secretKeyRef:
+              name: beneficiaries-secret
+              key: DB_NAME
+        - name: POSTGRES_USER
+          valueFrom:
+            secretKeyRef:
+              name: beneficiaries-secret
+              key: DB_USERNAME
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: beneficiaries-secret
+              key: DB_PASSWORD
+        - name: PGDATA
+          value: /var/lib/postgresql/data/pgdata
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: false
+        resources:
+          requests:
+            cpu: 250m
+            memory: 512Mi
+          limits:
+            cpu: 1000m
+            memory: 1Gi
+        livenessProbe:
+          exec:
+            command:
+            - /bin/sh
+            - -c
+            - pg_isready -U $DB_USERNAME -d $DB_NAME
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          exec:
+            command:
+            - /bin/sh
+            - -c
+            - pg_isready -U $DB_USERNAME -d $DB_NAME
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+        volumeMounts:
+        - name: data
+          mountPath: /var/lib/postgresql
+      volumes:
+      - name: data
+        persistentVolumeClaim:
+          claimName: beneficiaries-db-pvc
+      - name: init-script
+        configMap:
+          name: beneficiaries-db-init

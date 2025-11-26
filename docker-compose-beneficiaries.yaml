@@ -1,0 +1,106 @@
+name: sit-test-repo
+services:
+  beneficiaries-app:
+    annotations:
+      compose.score.dev/workload-name: beneficiaries
+    depends_on:
+      wait-for-resources:
+        condition: service_completed_successfully
+        required: true
+    environment:
+      HEALTH_DETAILS: always
+      HIBERNATE_DDL_AUTO: update
+      LOG_LEVEL_APP: INFO
+      LOG_LEVEL_JDBC: INFO
+      LOG_LEVEL_ROOT: INFO
+      REDIS_PASSWORD: lKlIU2aFatcxw4sZ
+      SERVER_PORT: "8080"
+      SPRING_DATA_REDIS_HOST: redis-A6FXtF
+      SPRING_DATA_REDIS_PORT: "6379"
+      SPRING_DATASOURCE_PASSWORD: postgres
+      SPRING_DATASOURCE_URL: jdbc:postgresql://beneficiaries-db-db:5432/beneficiaries
+      SPRING_DATASOURCE_USERNAME: postgres
+      TIMEZONE: UTC
+    hostname: beneficiaries
+    image: ghcr.io/alokkulkarni/beneficiaries:latest
+    networks:
+      - app-network
+    ports:
+      - 8080:8080
+  beneficiaries-db-db:
+    environment:
+      POSTGRES_DB: beneficiaries
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_USER: postgres
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U postgres -d beneficiaries
+      timeout: 5s
+      interval: 10s
+      retries: 5
+    image: ghcr.io/alokkulkarni/testcontainers-registry/testcontainers/postgres:16-alpine
+    restart: always
+    volumes:
+      - type: volume
+        source: beneficiaries-db-db-data
+        target: /var/lib/postgresql/data
+      - type: bind
+        source: ./beneficiaries/init.db
+        target: /docker-entrypoint-initdb.d/init.sql
+    networks:
+      - app-network
+  redis-A6FXtF:
+    command:
+      - /usr/local/etc/redis/redis.conf
+    entrypoint:
+      - redis-server
+    image: mirror.gcr.io/redis:7-alpine
+    labels:
+      dev.score.compose.res.uid: redis.default#beneficiaries.redis
+    restart: always
+    volumes:
+      - type: bind
+        source: .score-compose/mounts/redis-A6FXtF/redis.conf
+        target: /usr/local/etc/redis/redis.conf
+        read_only: true
+      - type: volume
+        source: redis-A6FXtF-data
+        target: /data
+        volume:
+          nocopy: true
+    healthcheck:
+      test:
+        - CMD
+        - redis-cli
+        - ping
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - app-network
+  wait-for-resources:
+    command:
+      - echo
+    depends_on:
+      beneficiaries-db-db:
+        condition: service_healthy
+        required: true
+      redis-A6FXtF:
+        condition: service_healthy
+        required: true
+    image: alpine
+    networks:
+      - app-network
+volumes:
+  beneficiaries-db-db-data:
+    driver: local
+  redis-A6FXtF-data:
+    name: redis-A6FXtF-data
+    driver: local
+    labels:
+      dev.score.compose.res.uid: redis.default#beneficiaries.redis
+networks:
+  app-network:
+    external: true
+    name: app-network

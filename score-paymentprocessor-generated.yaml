@@ -1,0 +1,36 @@
+apiVersion: score.dev/v1b1
+
+metadata:
+  name: paymentprocessor
+
+containers:
+  app:
+    image: ghcr.io/alokkulkarni/paymentprocessor:latest
+    variables:
+      SERVER_PORT: "8081"
+      SPRING_DATASOURCE_URL: "jdbc:postgresql://${resources.db.host}:${resources.db.port}/${resources.db.name}"
+      SPRING_DATASOURCE_USERNAME: ${resources.db.username}
+      SPRING_DATASOURCE_PASSWORD: ${resources.db.password}
+      HEALTH_DETAILS: always
+      LOG_LEVEL_ROOT: INFO
+      LOG_LEVEL_APP: INFO
+      LOG_LEVEL_JDBC: INFO
+      HIBERNATE_DDL_AUTO: update
+      TIMEZONE: UTC
+
+service:
+  ports:
+    app:
+      port: 8081
+      targetPort: 8081
+      protocol: TCP
+
+resources:
+  db:
+    type: postgres
+    metadata:
+      annotations:
+        database: paymentprocessor
+        username: postgres
+        password: postgres
+        init-script: ./paymentprocessor/init.sql
