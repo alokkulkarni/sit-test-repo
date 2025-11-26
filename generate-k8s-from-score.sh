@@ -18,16 +18,39 @@ CLOUD_PROVIDERS="${6:-}"
 
 if [ -z "$SCORE_FILE" ]; then
     echo "❌ Error: Score file is required"
+    echo ""
     echo "Usage: $0 <score-file> [output-dir] [platform] [enable-db-init] [deployment-target] [cloud-providers]"
-    echo "Platform options: kubernetes, openshift"
-    echo "enable-db-init: yes to create database init resources, no (default) to skip"
-    echo "deployment-target: local (default), cloud, or both"
-    echo "cloud-providers: aws, azure, gcp, or comma-separated (e.g., aws,azure) - required for cloud/both targets"
+    echo ""
+    echo "Parameters:"
+    echo "  score-file:        Path to the Score specification file (required)"
+    echo "  output-dir:        Output directory for manifests (default: k8s-manifests)"
+    echo "  platform:          kubernetes or openshift (default: kubernetes)"
+    echo "  enable-db-init:    yes to create database init resources, no (default) to skip"
+    echo "  deployment-target: local (default), cloud, or both"
+    echo "    - local: Full stack with DB, Redis, etc. for local/on-prem deployment"
+    echo "    - cloud: App only, no infrastructure (use managed cloud services)"
+    echo "    - both:  Generate manifests for both local and specified cloud(s)"
+    echo "  cloud-providers:   Comma-separated cloud providers (required for cloud/both)"
+    echo "    - Valid values: aws, azure, gcp"
+    echo "    - Example: aws,azure,gcp"
     echo ""
     echo "Examples:"
-    echo "  Local deployment:  $0 score.yaml k8s-manifests kubernetes no local"
-    echo "  AWS deployment:    $0 score.yaml k8s-manifests kubernetes no cloud aws"
-    echo "  Multi-cloud:       $0 score.yaml k8s-manifests kubernetes no both aws,azure,gcp"
+    echo "  # Local deployment (full stack)"
+    echo "  $0 score.yaml k8s-manifests kubernetes no local"
+    echo ""
+    echo "  # AWS cloud deployment (app only)"
+    echo "  $0 score.yaml k8s-manifests kubernetes no cloud aws"
+    echo ""
+    echo "  # Multi-cloud (AWS + Azure)"
+    echo "  $0 score.yaml k8s-manifests kubernetes no cloud aws,azure"
+    echo ""
+    echo "  # Both local and all clouds"
+    echo "  $0 score.yaml k8s-manifests kubernetes yes both aws,azure,gcp"
+    echo ""
+    echo "Cloud Deployment Notes:"
+    echo "  • Skips database/Redis/queue infrastructure (use managed services)"
+    echo "  • Applies cloud-specific optimizations (ALB, App Gateway, GCE, etc.)"
+    echo "  • Folder structure: OUTPUT_DIR/APP/cloud/PROVIDER/"
     exit 1
 fi
 
@@ -253,7 +276,8 @@ echo "  ✓ Generated: 11-secret.yaml"
 # ============================================================================
 # Generate ConfigMap for Database Init Script (if enabled and exists)
 # ============================================================================
-if [ "$HAS_DB_INIT" = true ]; then
+# Skip infrastructure resources for cloud deployments
+if [ "$SKIP_INFRA" = false ] && [ "$HAS_DB_INIT" = true ]; then
     # Resolve the init script path (handle relative paths from project root)
     if [[ "$DB_INIT_SCRIPT" == ./* ]]; then
         # Remove leading ./
@@ -1396,6 +1420,112 @@ echo "  ✓ Generated: README.md"
 # End of generate_manifests function
 }
 
+# ============================================================================
+# Cloud-Specific Optimization Functions
+# ============================================================================
+
+# Apply AWS/EKS optimizations
+apply_aws_optimizations() {
+    local TARGET_DIR=$1
+    
+    echo "  Applying AWS/EKS optimizations..."
+    
+    # Update StorageClass in PVC if it exists
+    if [ -f "$TARGET_DIR/20-pvc-database.yaml" ]; then
+        sed -i.bak 's/storageClassName: standard/storageClassName: gp3/' "$TARGET_DIR/20-pvc-database.yaml"
+        rm "$TARGET_DIR/20-pvc-database.yaml.bak" 2>/dev/null || true
+    fi
+    
+    # Add AWS-specific annotations to Ingress
+    if [ -f "$TARGET_DIR/50-ingress.yaml" ]; then
+        # Add ALB controller annotations
+        sed -i.bak '/metadata:/a\
+  annotations:\
+    kubernetes.io/ingress.class: alb\
+    alb.ingress.kubernetes.io/scheme: internet-facing\
+    alb.ingress.kubernetes.io/target-type: ip\
+    alb.ingress.kubernetes.io/healthcheck-path: /actuator/health
+' "$TARGET_DIR/50-ingress.yaml"
+        rm "$TARGET_DIR/50-ingress.yaml.bak" 2>/dev/null || true
+    fi
+    
+    # Add AWS labels to Deployment
+    if [ -f "$TARGET_DIR/40-deployment.yaml" ]; then
+        sed -i.bak '/  labels:/a\
+    eks.amazonaws.com/component: application
+' "$TARGET_DIR/40-deployment.yaml"
+        rm "$TARGET_DIR/40-deployment.yaml.bak" 2>/dev/null || true
+    fi
+    
+    echo "  ✓ Applied AWS/EKS optimizations"
+}
+
+# Apply Azure/AKS optimizations
+apply_azure_optimizations() {
+    local TARGET_DIR=$1
+    
+    echo "  Applying Azure/AKS optimizations..."
+    
+    # Update StorageClass in PVC if it exists
+    if [ -f "$TARGET_DIR/20-pvc-database.yaml" ]; then
+        sed -i.bak 's/storageClassName: standard/storageClassName: managed-premium/' "$TARGET_DIR/20-pvc-database.yaml"
+        rm "$TARGET_DIR/20-pvc-database.yaml.bak" 2>/dev/null || true
+    fi
+    
+    # Add Azure-specific annotations to Ingress
+    if [ -f "$TARGET_DIR/50-ingress.yaml" ]; then
+        sed -i.bak '/metadata:/a\
+  annotations:\
+    kubernetes.io/ingress.class: azure/application-gateway\
+    appgw.ingress.kubernetes.io/health-probe-path: /actuator/health
+' "$TARGET_DIR/50-ingress.yaml"
+        rm "$TARGET_DIR/50-ingress.yaml.bak" 2>/dev/null || true
+    fi
+    
+    # Add Azure Workload Identity labels to Deployment
+    if [ -f "$TARGET_DIR/40-deployment.yaml" ]; then
+        sed -i.bak '/  labels:/a\
+    azure.workload.identity/use: "true"
+' "$TARGET_DIR/40-deployment.yaml"
+        rm "$TARGET_DIR/40-deployment.yaml.bak" 2>/dev/null || true
+    fi
+    
+    echo "  ✓ Applied Azure/AKS optimizations"
+}
+
+# Apply GCP/GKE optimizations
+apply_gcp_optimizations() {
+    local TARGET_DIR=$1
+    
+    echo "  Applying GCP/GKE optimizations..."
+    
+    # Update StorageClass in PVC if it exists
+    if [ -f "$TARGET_DIR/20-pvc-database.yaml" ]; then
+        sed -i.bak 's/storageClassName: standard/storageClassName: pd-ssd/' "$TARGET_DIR/20-pvc-database.yaml"
+        rm "$TARGET_DIR/20-pvc-database.yaml.bak" 2>/dev/null || true
+    fi
+    
+    # Add GCP-specific annotations to Ingress
+    if [ -f "$TARGET_DIR/50-ingress.yaml" ]; then
+        sed -i.bak '/metadata:/a\
+  annotations:\
+    kubernetes.io/ingress.class: gce\
+    cloud.google.com/neg: '"'"'{"ingress": true}'"'"'
+' "$TARGET_DIR/50-ingress.yaml"
+        rm "$TARGET_DIR/50-ingress.yaml.bak" 2>/dev/null || true
+    fi
+    
+    # Add GKE labels to Deployment
+    if [ -f "$TARGET_DIR/40-deployment.yaml" ]; then
+        sed -i.bak '/  labels:/a\
+    cloud.google.com/gke-nodepool: default-pool
+' "$TARGET_DIR/40-deployment.yaml"
+        rm "$TARGET_DIR/40-deployment.yaml.bak" 2>/dev/null || true
+    fi
+    
+    echo "  ✓ Applied GCP/GKE optimizations"
+}
+
 # Main orchestration logic
 echo ""
 echo "================================================================"
@@ -1418,6 +1548,19 @@ elif [ "$DEPLOYMENT_TARGET" = "cloud" ]; then
     for cloud in "${CLOUD_ARRAY[@]}"; do
         TARGET_DIR="$OUTPUT_DIR/$WORKLOAD_NAME/cloud/$cloud"
         generate_manifests "$cloud" "$TARGET_DIR" true
+        
+        # Apply cloud-specific optimizations
+        case "$cloud" in
+            aws)
+                apply_aws_optimizations "$TARGET_DIR"
+                ;;
+            azure)
+                apply_azure_optimizations "$TARGET_DIR"
+                ;;
+            gcp)
+                apply_gcp_optimizations "$TARGET_DIR"
+                ;;
+        esac
     done
     
 elif [ "$DEPLOYMENT_TARGET" = "both" ]; then
@@ -1432,6 +1575,19 @@ elif [ "$DEPLOYMENT_TARGET" = "both" ]; then
     for cloud in "${CLOUD_ARRAY[@]}"; do
         TARGET_DIR="$OUTPUT_DIR/$WORKLOAD_NAME/cloud/$cloud"
         generate_manifests "$cloud" "$TARGET_DIR" true
+        
+        # Apply cloud-specific optimizations
+        case "$cloud" in
+            aws)
+                apply_aws_optimizations "$TARGET_DIR"
+                ;;
+            azure)
+                apply_azure_optimizations "$TARGET_DIR"
+                ;;
+            gcp)
+                apply_gcp_optimizations "$TARGET_DIR"
+                ;;
+        esac
     done
 fi
 
