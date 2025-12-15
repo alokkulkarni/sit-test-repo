@@ -126,6 +126,12 @@ jobs:
             - Dependencies found in pom.xml: ${dependencies || 'None detected'}
             - Applicable slice tests: ${sliceTests || 'None applicable'}
 
+            **CRITICAL - Branch Context:**
+            - This workflow is running on branch '${branch}'
+            - ALL code changes in this branch MUST be included in generated tests
+            - Copilot MUST create PR branch FROM '${branch}', NOT from 'main'
+            - This ensures all fixes and changes from the source branch are preserved
+
             **Requirements:**
             1. **Validate dependencies first**: Inspect pom.xml to confirm which Spring/testing dependencies are present before generating tests.
             2. **Use existing frameworks**: Prefer test frameworks already in use: ${frameworksHint || 'JUnit 5, Mockito, Spring Boot Test (defaults)'}.
@@ -171,17 +177,20 @@ jobs:
             8. **Keep changes minimal**: Focus only on test code; do not refactor production code unless absolutely required for testability.
             9. **Verify coverage**: After generating tests, validate that the coverage thresholds (80% line and branch) are met for all changed source files.
             10. **CRITICAL - Test Validation & Auto-Fix**:
-                - **MUST** run tests after generating them: \`./mvnw test\`
-                - **IF tests fail**: Analyze the error messages and fix the issues automatically
+                - **MUST** run ALL tests in the project: \`./mvnw clean test\`
+                - **NOT** just the newly created tests - run the ENTIRE test suite
+                - This ensures newly generated tests don't break existing tests
+                - **IF ANY tests fail** (new or existing): Analyze the error messages and fix the issues automatically
                 - Common issues to check and fix:
                   - **Missing @Mock annotations**: Ensure ALL service dependencies are mocked (e.g., PaymentAuditService, FraudService, etc.)
-                  - **Missing imports**: Add required import statements (e.g., java.time.LocalDateTime)
+                  - **Missing imports**: Add required import statements (e.g., java.time.LocalDateTime, PaymentAuditService)
                   - **Type mismatches**: Convert types as needed (e.g., double to String using String.valueOf())
                   - **NullPointerExceptions**: Verify all mocked dependencies are properly initialized
                   - **Incorrect expected values**: Ensure test assertions match actual service behavior
-                - **Re-run tests** after each fix until all tests pass
-                - **DO NOT commit** until \`./mvnw test\` exits with code 0 (success)
-                - Document any fixes made in the PR description
+                  - **Existing tests failing**: Update existing test files if they're missing mocks for new dependencies
+                - **Re-run ALL tests** (\`./mvnw clean test\`) after each fix until ALL tests pass
+                - **DO NOT commit** until \`./mvnw test\` exits with code 0 (success) for ALL tests in the project
+                - Document any fixes made in the PR description, especially fixes to existing tests
             11. **IMPORTANT - Test Attribution**: Add a clear Javadoc comment at the top of EVERY generated test file:
                \`\`\`java
                /**
