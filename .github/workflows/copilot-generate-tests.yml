@@ -193,8 +193,19 @@ jobs:
                  ${sliceTests ? `- Use: ${sliceTests}` : '- No slice tests applicable (no Spring web/data dependencies found)'}
                  - Do NOT use @DataJpaTest if only spring-data-jdbc is present; use @DataJdbcTest instead.
                  - Do NOT use @WebMvcTest if only webflux is present; use @WebFluxTest instead.
-               - **Integration tests**: Use Testcontainers for repositories, messaging, or databases ONLY if corresponding dependencies exist (e.g., Kafka, PostgreSQL, Redis, etc.).
-               - **BDD tests**: Generate Cucumber scenarios if cucumber dependencies exist or if requested.
+               - **Integration tests**: 
+                 - **MANDATORY**: MUST use Testcontainers for all integration tests
+                 - **DO NOT** use TestRestTemplate, @SpringBootTest without containers, or in-memory databases
+                 - **REQUIRED**: Use real containers (PostgreSQL, MySQL, MongoDB, Redis, Kafka, RabbitMQ, etc.)
+                 - Testcontainers configuration is already available in src/test/resources/application-test.yml
+                 - Example: Use @Testcontainers, @Container PostgreSQLContainer for database integration tests
+                 - **MUST** update src/test/resources/init.db (or equivalent schema file) with test data needed for new tests
+               - **BDD tests**: 
+                 - **MANDATORY**: MUST use Testcontainers for all BDD/Cucumber scenarios
+                 - **DO NOT** use TestRestTemplate or mock services in BDD tests
+                 - BDD tests MUST run against real containers to validate end-to-end behavior
+                 - Use Cucumber with Testcontainers integration
+                 - **MUST** update src/test/resources/init.db with test data for BDD scenarios
             4. **Edge case coverage**: Include comprehensive test scenarios covering:
                - Null/empty inputs and boundary conditions
                - Error conditions and exception handling
@@ -228,7 +239,39 @@ jobs:
                - Cucumber JVM for BDD (optional, add if valuable)
             8. **Keep changes minimal**: Focus only on test code; do not refactor production code unless absolutely required for testability.
             9. **Verify coverage**: After generating tests, validate that the coverage thresholds (80% line and branch) are met for all changed source files.
-            10. **CRITICAL - Test Validation & Auto-Fix**:
+            10. **CRITICAL - TestContainers for Integration & BDD Tests**:
+                - **MANDATORY**: ALL integration and BDD tests MUST use Testcontainers
+                - **PROHIBITED**: Do NOT use TestRestTemplate, @SpringBootTest without containers, H2/in-memory databases, or embedded services
+                - **Container Selection**: Use real containers matching production (PostgreSQL, MySQL, MongoDB, Redis, Kafka, etc.)
+                - **Configuration**: Testcontainers config is in src/test/resources/application-test.yml or TestContainersConfig.java
+                - **Test Data Management**:
+                  - **MUST** update src/test/resources/init.db (or schema.sql/data.sql) with SQL INSERT statements for test data
+                  - Include realistic test data that covers edge cases and scenarios in your tests
+                  - Ensure referential integrity (foreign keys, constraints)
+                  - Use meaningful test data names (e.g., "Test Customer 1", "CUST001")
+                - **BDD/Cucumber with Testcontainers**:
+                  - Use @Testcontainers and @Container in step definitions
+                  - Share container instances across scenarios using singleton pattern
+                  - Reset database state between scenarios using init.db or @BeforeEach cleanup
+                - **Example patterns to follow**:
+                  \`\`\`java
+                  @Testcontainers
+                  @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+                  class MyIntegrationTest {
+                      @Container
+                      static PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:15-alpine")
+                          .withDatabaseName("testdb")
+                          .withInitScript("init.db");
+                      
+                      @DynamicPropertySource
+                      static void configureProperties(DynamicPropertyRegistry registry) {
+                          registry.add("spring.datasource.url", postgres::getJdbcUrl);
+                          registry.add("spring.datasource.username", postgres::getUsername);
+                          registry.add("spring.datasource.password", postgres::getPassword);
+                      }
+                  }
+                  \`\`\`
+            11. **CRITICAL - Test Validation & Auto-Fix**:
                 - **MUST** run ALL tests in the project: \`./mvnw clean test\`
                 - **NOT** just the newly created tests - run the ENTIRE test suite
                 - This ensures newly generated tests don't break existing tests
@@ -243,7 +286,7 @@ jobs:
                 - **Re-run ALL tests** (\`./mvnw clean test\`) after each fix until ALL tests pass
                 - **DO NOT commit** until \`./mvnw test\` exits with code 0 (success) for ALL tests in the project
                 - Document any fixes made in the PR description, especially fixes to existing tests
-            11. **IMPORTANT - Test Attribution**: Add a clear Javadoc comment at the top of EVERY generated test file:
+            12. **IMPORTANT - Test Attribution**: Add a clear Javadoc comment at the top of EVERY generated test file:
                \`\`\`java
                /**
                 * Generated by GitHub Copilot Agent
