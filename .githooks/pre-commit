@@ -1,0 +1,49 @@
+#!/usr/bin/env zsh
+set -euo pipefail
+
+repo_root_dir="$(git rev-parse --show-toplevel)"
+cd "$repo_root_dir"
+
+changed_main=($(git diff --cached --name-only --diff-filter=AMR -- '**/src/main/java/**/*.java'))
+if [[ ${#changed_main[@]} -eq 0 ]]; then
+  exit 0
+fi
+
+missing_tests=()
+for f in $changed_main; do
+  module_dir="${f%%/src/main/*}"
+  rel_no_ext="${f%.java}"
+  pkg_path="${rel_no_ext#${module_dir}/src/main/java/}"
+  test_candidate="${module_dir}/src/test/java/${pkg_path}Test.java"
+  alt_candidate="${module_dir}/src/test/java/${pkg_path}Tests.java"
+  if [[ ! -f "$test_candidate" && ! -f "$alt_candidate" ]]; then
+    missing_tests+="$f"
+  fi
+done
+
+if [[ ${#missing_tests[@]} -gt 0 ]]; then
+  echo "❌ Commit blocked: missing tests for changed source files:" >&2
+  for m in $missing_tests; do
+    echo "  - $m" >&2
+  done
+  branch_name="$(git rev-parse --abbrev-ref HEAD)"
+  issue_title="Generate tests for branch ${branch_name} (sit-test-repo)"
+  issue_body=$"Changed files require tests:\n"
+  for m in $missing_tests; do
+    issue_body+=$'\n- '
+    issue_body+="$m"
+  done
+  issue_body+=$"\n\n#github-pull-request_copilot-coding-agent\n"
+  if command -v gh >/dev/null 2>&1; then
+    existing_id=$(gh issue list --search "$issue_title" --state open --json number --jq '.[0].number' 2>/dev/null || true)
+    if [[ -n "$existing_id" ]]; then
+      gh issue comment "$existing_id" --body "$issue_body" || true
+    else
+      gh issue create --title "$issue_title" --body "$issue_body" --label "tests" --label "copilot-agent" || true
+    fi
+  fi
+  echo "Tip: use --no-verify to bypass locally; PR checks still enforce tests." >&2
+  exit 1
+fi
+
+exit 0
