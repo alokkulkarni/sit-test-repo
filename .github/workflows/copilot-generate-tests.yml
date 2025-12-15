@@ -1,0 +1,415 @@
+name: Copilot Agent - Generate Tests
+
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: Branch to analyze and generate tests for
+        required: true
+      changed_files:
+        description: Newline-separated list of changed Java source files
+        required: false
+      frameworks_hint:
+        description: Optional hint of frameworks found (JUnit5, SpringBootTest, Mockito, Cucumber, Testcontainers)
+        required: false
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  generate-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout target branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.branch }}
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Analyze project dependencies and frameworks
+        id: analyze
+        run: |
+          echo "Detecting existing test frameworks in src/test..."
+          frameworks=""
+          if grep -R "org.junit.jupiter" src/test 2>/dev/null; then frameworks="${frameworks}JUnit5, "; fi
+          if grep -R "@SpringBootTest" src/test 2>/dev/null; then frameworks="${frameworks}SpringBootTest, "; fi
+          if grep -R "org.mockito" src/test 2>/dev/null; then frameworks="${frameworks}Mockito, "; fi
+          if grep -R "io.cucumber" src/test 2>/dev/null; then frameworks="${frameworks}Cucumber, "; fi
+          if grep -R "org.testcontainers" src/test 2>/dev/null; then frameworks="${frameworks}Testcontainers, "; fi
+          frameworks="${frameworks%, }"
+          echo "frameworks=${frameworks}" >> $GITHUB_OUTPUT
+          
+          echo "Analyzing pom.xml dependencies..."
+          dependencies=""
+          slice_tests=""
+          
+          # Check for Spring Web (enables @WebMvcTest)
+          if grep -q "spring-boot-starter-web" pom.xml; then 
+            dependencies="${dependencies}spring-web, "
+            slice_tests="${slice_tests}@WebMvcTest, "
+          fi
+          
+          # Check for Spring Data JPA (enables @DataJpaTest)
+          if grep -q "spring-boot-starter-data-jpa" pom.xml; then 
+            dependencies="${dependencies}spring-data-jpa, "
+            slice_tests="${slice_tests}@DataJpaTest, "
+          fi
+          
+          # Check for Spring Data JDBC (enables @DataJdbcTest)
+          if grep -q "spring-boot-starter-data-jdbc" pom.xml; then 
+            dependencies="${dependencies}spring-data-jdbc, "
+            slice_tests="${slice_tests}@DataJdbcTest, "
+          fi
+          
+          # Check for Spring Data Redis (enables @DataRedisTest)
+          if grep -q "spring-boot-starter-data-redis" pom.xml; then 
+            dependencies="${dependencies}spring-data-redis, "
+            slice_tests="${slice_tests}@DataRedisTest, "
+          fi
+          
+          # Check for Spring Data MongoDB (enables @DataMongoTest)
+          if grep -q "spring-boot-starter-data-mongodb" pom.xml; then 
+            dependencies="${dependencies}spring-data-mongodb, "
+            slice_tests="${slice_tests}@DataMongoTest, "
+          fi
+          
+          # Check for Spring Kafka
+          if grep -q "spring-kafka" pom.xml; then 
+            dependencies="${dependencies}spring-kafka, "
+          fi
+          
+          # Check for Spring AMQP/RabbitMQ
+          if grep -q "spring-boot-starter-amqp" pom.xml; then 
+            dependencies="${dependencies}spring-amqp, "
+          fi
+          
+          # Check for WebFlux (enables @WebFluxTest)
+          if grep -q "spring-boot-starter-webflux" pom.xml; then 
+            dependencies="${dependencies}spring-webflux, "
+            slice_tests="${slice_tests}@WebFluxTest, "
+          fi
+          
+          dependencies="${dependencies%, }"
+          slice_tests="${slice_tests%, }"
+          echo "dependencies=${dependencies}" >> $GITHUB_OUTPUT
+          echo "slice_tests=${slice_tests}" >> $GITHUB_OUTPUT
+          
+          echo "Detected dependencies: ${dependencies}"
+          echo "Applicable slice tests: ${slice_tests}"
+
+      - name: Create or update issue to trigger Copilot Coding Agent
+        id: create_issue
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const branch = '${{ inputs.branch }}';
+            const changedFiles = `${{ inputs.changed_files }}`;
+            const frameworksHint = '${{ inputs.frameworks_hint }}' || '${{ steps.analyze.outputs.frameworks }}';
+            const dependencies = '${{ steps.analyze.outputs.dependencies }}';
+            const sliceTests = '${{ steps.analyze.outputs.slice_tests }}';
+            const issueTitle = `Generate tests for branch ${branch} (sit-test-repo)`;
+            
+            const issueBody = `Please analyze the sit-test-repo repo on branch '${branch}' and generate tests for changed Java sources.
+
+            **Context:**
+            - Branch: ${branch}
+            - Changed files:
+            ${changedFiles || 'Analyze all recent changes on branch'}
+            - Existing test frameworks detected: ${frameworksHint || 'None detected'}
+            - Dependencies found in pom.xml: ${dependencies || 'None detected'}
+            - Applicable slice tests: ${sliceTests || 'None applicable'}
+
+            **Requirements:**
+            1. **Validate dependencies first**: Inspect pom.xml to confirm which Spring/testing dependencies are present before generating tests.
+            2. **Use existing frameworks**: Prefer test frameworks already in use: ${frameworksHint || 'JUnit 5, Mockito, Spring Boot Test (defaults)'}.
+            3. **Generate appropriate test types**:
+               - **Unit tests**: Always generate for changed classes using JUnit 5 + Mockito for mocking.
+               - **Slice tests**: ONLY generate slice tests for dependencies actually present in pom.xml:
+                 ${sliceTests ? `- Use: ${sliceTests}` : '- No slice tests applicable (no Spring web/data dependencies found)'}
+                 - Do NOT use @DataJpaTest if only spring-data-jdbc is present; use @DataJdbcTest instead.
+                 - Do NOT use @WebMvcTest if only webflux is present; use @WebFluxTest instead.
+               - **Integration tests**: Use Testcontainers for repositories, messaging, or databases ONLY if corresponding dependencies exist (e.g., Kafka, PostgreSQL, Redis, etc.).
+               - **BDD tests**: Generate Cucumber scenarios if cucumber dependencies exist or if requested.
+            4. **Edge case coverage**: Include comprehensive test scenarios covering:
+               - Null/empty inputs and boundary conditions
+               - Error conditions and exception handling
+               - Concurrent access scenarios (if applicable)
+               - Invalid state transitions
+               - Resource exhaustion and timeout scenarios
+               - Security edge cases (unauthorized access, invalid tokens, etc.)
+            5. **Coverage thresholds**: Ensure generated tests achieve:
+               - Minimum 80% line coverage for changed files
+               - Minimum 80% branch coverage for changed files
+               - Do NOT generate redundant tests that test the same path/scenario
+               - Focus on meaningful tests that validate actual business logic and edge cases
+            6. **Test quality and necessity**:
+               - Do NOT create tests for:
+                 - Simple getters/setters without logic
+                 - Constructors with only field assignments
+                 - DTOs/POJOs with no behavior
+                 - Auto-generated code (Lombok @Data, etc.)
+               - DO create tests for:
+                 - Business logic and calculations
+                 - Validation logic
+                 - State management and workflows
+                 - External integrations and API calls
+                 - Data transformations and mappings
+                 - Security-sensitive operations
+            7. **Default fallbacks** (if no test frameworks detected):
+               - JUnit 5 for unit tests
+               - Mockito for mocking
+               - Spring Boot Test (@SpringBootTest) for integration tests
+               - Testcontainers for container-based integration tests
+               - Cucumber JVM for BDD (optional, add if valuable)
+            8. **Keep changes minimal**: Focus only on test code; do not refactor production code unless absolutely required for testability.
+            9. **Verify coverage**: After generating tests, validate that the coverage thresholds (80% line and branch) are met for all changed source files.
+            10. **IMPORTANT - Test Attribution**: Add a clear Javadoc comment at the top of EVERY generated test file:
+               \`\`\`java
+               /**
+                * Generated by GitHub Copilot Agent
+                * Issue: #<issue-number>
+                * Date: <generation-date>
+                * 
+                * DO NOT EDIT: This test was auto-generated by Copilot Agent.
+                * Review the tests and modify as needed for your specific use case.
+                */
+               \`\`\`
+               For Cucumber feature files, use:
+               \`\`\`gherkin
+               # Generated by GitHub Copilot Agent
+               # Issue: #<issue-number>
+               # Date: <generation-date>
+               # DO NOT EDIT: This test was auto-generated. Review and modify as needed.
+               \`\`\`
+
+            #github-pull-request_copilot-coding-agent
+            `;
+
+            // Check for existing open issue
+            const { data: issues } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: 'copilot-agent,tests'
+            });
+
+            const existingIssue = issues.find(issue => issue.title === issueTitle);
+            let issueNumber;
+
+            if (existingIssue) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: existingIssue.number,
+                body: issueBody
+              });
+              console.log(`Updated existing issue #${existingIssue.number}`);
+              issueNumber = existingIssue.number;
+            } else {
+              const { data: newIssue } = await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: issueTitle,
+                body: issueBody,
+                labels: ['copilot-agent', 'tests']
+              });
+              console.log(`Created new issue #${newIssue.number}`);
+              issueNumber = newIssue.number;
+            }
+            
+            core.setOutput('issue_number', issueNumber);
+
+      - name: Wait for Copilot Agent to create or update PR
+        id: wait_for_pr
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const issueNumber = ${{ steps.create_issue.outputs.issue_number }};
+            const maxAttempts = 60; // Wait up to 30 minutes (30s * 60)
+            const delayMs = 30000; // 30 seconds between checks
+            
+            let attempt = 0;
+            let prFound = false;
+            let prNumber = null;
+            let prBranch = null;
+            
+            console.log(`Waiting for Copilot Agent to respond to issue #${issueNumber}...`);
+            
+            while (attempt < maxAttempts && !prFound) {
+              attempt++;
+              console.log(`Attempt ${attempt}/${maxAttempts}...`);
+              
+              // Check if issue was closed by Copilot without creating a PR
+              const { data: issue } = await github.rest.issues.get({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issueNumber
+              });
+              
+              if (issue.state === 'closed') {
+                console.log('Issue was closed without creating a PR. Agent may have determined no tests were needed.');
+                core.setOutput('pr_created', 'false');
+                core.setOutput('agent_action', 'closed_no_pr');
+                return;
+              }
+              
+              // Check for PRs created by Copilot Agent
+              const { data: prs } = await github.rest.pulls.list({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                state: 'open',
+                sort: 'created',
+                direction: 'desc',
+                per_page: 20
+              });
+              
+              // Look for PR created by copilot-swe-agent that mentions this issue
+              for (const pr of prs) {
+                if (pr.user.login === 'copilot-swe-agent[bot]' || pr.user.type === 'Bot') {
+                  const { data: timeline } = await github.rest.issues.listEventsForTimeline({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: issueNumber
+                  });
+                  
+                  // Check if this PR is linked to our issue
+                  const prMentionsIssue = timeline.some(event => 
+                    event.event === 'cross-referenced' && 
+                    event.source?.issue?.number === pr.number
+                  );
+                  
+                  if (prMentionsIssue || pr.body?.includes(`#${issueNumber}`)) {
+                    console.log(`Found Copilot PR #${pr.number}: ${pr.title}`);
+                    prFound = true;
+                    prNumber = pr.number;
+                    prBranch = pr.head.ref;
+                    break;
+                  }
+                }
+              }
+              
+              if (!prFound && attempt < maxAttempts) {
+                await new Promise(resolve => setTimeout(resolve, delayMs));
+              }
+            }
+            
+            if (prFound) {
+              console.log(`✅ Copilot created PR #${prNumber} from branch ${prBranch}`);
+              core.setOutput('pr_created', 'true');
+              core.setOutput('pr_number', prNumber);
+              core.setOutput('pr_branch', prBranch);
+              core.setOutput('agent_action', 'created_pr');
+            } else {
+              console.log('⏱️ Timeout: No PR created within the waiting period.');
+              core.setOutput('pr_created', 'false');
+              core.setOutput('agent_action', 'timeout');
+            }
+
+      - name: Close issue with summary
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const issueNumber = ${{ steps.create_issue.outputs.issue_number }};
+            const prCreated = '${{ steps.wait_for_pr.outputs.pr_created }}' === 'true';
+            const agentAction = '${{ steps.wait_for_pr.outputs.agent_action }}';
+            const prNumber = '${{ steps.wait_for_pr.outputs.pr_number }}';
+            const prBranch = '${{ steps.wait_for_pr.outputs.pr_branch }}';
+            
+            let summaryComment = '## 🤖 Copilot Agent Workflow Summary\n\n';
+            
+            if (agentAction === 'created_pr') {
+              summaryComment += `✅ **Status**: PR Created Successfully\n\n`;
+              summaryComment += `- **PR**: #${prNumber}\n`;
+              summaryComment += `- **Branch**: \`${prBranch}\`\n`;
+              summaryComment += `- **Next Steps**:\n`;
+              summaryComment += `  1. CI pipeline will run on the PR branch\n`;
+              summaryComment += `  2. Review the generated tests in PR #${prNumber}\n`;
+              summaryComment += `  3. Merge the PR if tests are satisfactory\n\n`;
+              summaryComment += `Closing this issue as the tests have been generated.`;
+            } else if (agentAction === 'closed_no_pr') {
+              summaryComment += `ℹ️ **Status**: No PR Created\n\n`;
+              summaryComment += `The Copilot Agent closed this issue without creating a PR.\n`;
+              summaryComment += `Possible reasons:\n`;
+              summaryComment += `- No test generation was needed\n`;
+              summaryComment += `- Tests already exist for the changed files\n`;
+              summaryComment += `- Agent determined the changes don't require new tests\n`;
+            } else if (agentAction === 'timeout') {
+              summaryComment += `⏱️ **Status**: Timeout\n\n`;
+              summaryComment += `The workflow timed out waiting for Copilot Agent to create a PR.\n`;
+              summaryComment += `Possible reasons:\n`;
+              summaryComment += `- Agent is still processing (check back later)\n`;
+              summaryComment += `- Agent encountered an error\n`;
+              summaryComment += `- Issue was not properly assigned to @copilot\n\n`;
+              summaryComment += `**Action Required**: Check issue status and reassign to @copilot if needed.`;
+            }
+            
+            // Add comment with summary
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issueNumber,
+              body: summaryComment
+            });
+            
+            // Close issue if PR was created or if agent closed it
+            if (agentAction === 'created_pr' || agentAction === 'closed_no_pr') {
+              await github.rest.issues.update({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issueNumber,
+                state: 'closed',
+                state_reason: 'completed'
+              });
+              console.log(`✅ Issue #${issueNumber} closed with summary`);
+            }
+
+      - name: Trigger CI on agent branch
+        if: steps.wait_for_pr.outputs.pr_created == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const prBranch = '${{ steps.wait_for_pr.outputs.pr_branch }}';
+            const prNumber = '${{ steps.wait_for_pr.outputs.pr_number }}';
+            
+            console.log(`Triggering CI workflow on branch: ${prBranch}`);
+            
+            // Trigger the CI workflow on the PR branch
+            await github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'ci.yml',
+              ref: prBranch
+            });
+            
+            console.log(`✅ CI workflow triggered for PR #${prNumber}`);
+            
+            // Add comment to PR
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prNumber,
+              body: '🚀 CI workflow triggered automatically to verify generated tests.'
+            });
+
+      - name: Post workflow summary
+        if: always()
+        run: |
+          echo "## Workflow Completed" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Issue**: #${{ steps.create_issue.outputs.issue_number }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Agent Action**: ${{ steps.wait_for_pr.outputs.agent_action }}" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ steps.wait_for_pr.outputs.pr_created }}" = "true" ]; then
+            echo "- **PR Created**: #${{ steps.wait_for_pr.outputs.pr_number }}" >> $GITHUB_STEP_SUMMARY
+            echo "- **Branch**: ${{ steps.wait_for_pr.outputs.pr_branch }}" >> $GITHUB_STEP_SUMMARY
+            echo "- **CI Triggered**: ✅" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "- **PR Created**: No" >> $GITHUB_STEP_SUMMARY
+          fi
