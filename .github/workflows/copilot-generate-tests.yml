@@ -197,9 +197,16 @@ jobs:
                - Invalid state transitions
                - Resource exhaustion and timeout scenarios
                - Security edge cases (unauthorized access, invalid tokens, etc.)
-            5. **Coverage thresholds**: Ensure generated tests achieve:
-               - Minimum 80% line coverage for changed files
-               - Minimum 80% branch coverage for changed files
+            5. **CRITICAL - Coverage Verification (MANDATORY - NEVER SKIP)**:
+               - **MUST** verify coverage after generating ALL tests
+               - **MUST** run \`./mvnw clean test jacoco:report\` to generate coverage report
+               - **MUST** check JaCoCo XML report at target/site/jacoco/jacoco.xml for actual coverage percentages
+               - **REQUIRED THRESHOLDS** (coverage MUST meet or exceed these):
+                 - Minimum 80% line coverage for ALL changed source files
+                 - Minimum 80% branch coverage for ALL changed source files
+               - **IF coverage is below thresholds**: Generate additional tests to meet requirements
+               - **NEVER** skip coverage verification - this is MANDATORY before finalizing PR
+               - **MUST** include coverage report summary in PR description with actual percentages
                - Do NOT generate redundant tests that test the same path/scenario
                - Focus on meaningful tests that validate actual business logic and edge cases
             6. **Test quality and necessity**:
@@ -223,10 +230,18 @@ jobs:
                - Cucumber JVM for BDD (optional, add if valuable)
             8. **Keep changes minimal**: Focus only on test code; do not refactor production code unless absolutely required for testability.
             9. **Verify coverage**: After generating tests, validate that the coverage thresholds (80% line and branch) are met for all changed source files.
-            10. **CRITICAL - TestContainers for Integration & BDD Tests**:
-                - **MANDATORY**: ALL integration and BDD tests MUST use Testcontainers
-                - **PROHIBITED**: Do NOT use TestRestTemplate, @SpringBootTest without containers, H2/in-memory databases, or embedded services
-                - **Container Selection**: Use real containers matching production (PostgreSQL, MySQL, MongoDB, Redis, Kafka, etc.)
+            10. **CRITICAL - TestContainers for Integration & BDD Tests (STRICTLY ENFORCED)**:
+                - **MANDATORY**: ALL integration and BDD tests MUST ONLY use Testcontainers - NO EXCEPTIONS
+                - **PROHIBITED**: NEVER use TestRestTemplate, @SpringBootTest without containers, H2/in-memory databases, embedded services, or mock HTTP servers
+                - **Container Selection**: 
+                  - Use REAL containers matching production (PostgreSQL, MySQL, MongoDB, Redis, Kafka, RabbitMQ, etc.)
+                  - IF no official Testcontainer exists for an external service: Create a MOCK Testcontainer using GenericContainer with the service's Docker image
+                  - Example mock container: \`GenericContainer.withImage("custom-service:latest").withExposedPorts(8080)\`
+                - **Every Integration/BDD Test MUST**:
+                  - Have @Testcontainers annotation
+                  - Declare @Container fields for ALL external dependencies
+                  - Use @DynamicPropertySource or @ServiceConnection for configuration
+                  - Execute against real containerized services ONLY
                 - **Configuration**: Testcontainers config is in src/test/resources/application-test.yml or TestContainersConfig.java
                 - **Test Data Management**:
                   - **MUST** update src/test/resources/init.db (or schema.sql/data.sql) with SQL INSERT statements for test data
@@ -255,10 +270,21 @@ jobs:
                       }
                   }
                   \`\`\`
-            11. **CRITICAL - Test Validation & Auto-Fix**:
-                - **MUST** run ALL tests in the project: \`./mvnw clean test\`
-                - **NOT** just the newly created tests - run the ENTIRE test suite
-                - This ensures newly generated tests don't break existing tests
+            11. **CRITICAL - Test Execution, Coverage & Auto-Fix**:
+                - **STEP 1 - Run ALL Tests**: Execute \`./mvnw clean test\` for ENTIRE test suite (unit + integration + BDD)
+                  - **NOT** just the newly created tests - run ALL tests in the project
+                  - This ensures newly generated tests don't break existing tests
+                  - ALL test types MUST execute: unit tests, integration tests, BDD/Cucumber tests
+                - **STEP 2 - Generate Coverage Report**: Run \`./mvnw jacoco:report\`
+                  - Parse target/site/jacoco/jacoco.xml for coverage metrics
+                  - Verify EVERY changed source file meets 80% line AND branch coverage thresholds
+                  - IF below threshold: Generate additional tests and re-run coverage
+                - **STEP 3 - Add Coverage to PR**:
+                  - Include coverage summary in PR description showing:
+                    - Overall coverage percentage
+                    - Per-file coverage for all changed files
+                    - Comparison with threshold (80%)
+                  - Attach jacoco.xml or coverage report as PR comment
                 - **IF ANY tests fail** (new or existing): Analyze the error messages and fix the issues automatically
                 - Common issues to check and fix:
                   - **Missing @Mock annotations**: Ensure ALL service dependencies are mocked (e.g., PaymentAuditService, FraudService, etc.)
