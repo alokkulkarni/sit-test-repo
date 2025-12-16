@@ -99,36 +99,30 @@ jobs:
           
           echo "Analyzing pom.xml dependencies..."
           dependencies=""
-          slice_tests=""
           
-          # Check for Spring Web (enables @WebMvcTest)
+          # Check for Spring Web
           if grep -q "spring-boot-starter-web" pom.xml; then 
             dependencies="${dependencies}spring-web, "
-            slice_tests="${slice_tests}@WebMvcTest, "
           fi
           
-          # Check for Spring Data JPA (enables @DataJpaTest)
+          # Check for Spring Data JPA
           if grep -q "spring-boot-starter-data-jpa" pom.xml; then 
             dependencies="${dependencies}spring-data-jpa, "
-            slice_tests="${slice_tests}@DataJpaTest, "
           fi
           
-          # Check for Spring Data JDBC (enables @DataJdbcTest)
+          # Check for Spring Data JDBC
           if grep -q "spring-boot-starter-data-jdbc" pom.xml; then 
             dependencies="${dependencies}spring-data-jdbc, "
-            slice_tests="${slice_tests}@DataJdbcTest, "
           fi
           
-          # Check for Spring Data Redis (enables @DataRedisTest)
+          # Check for Spring Data Redis
           if grep -q "spring-boot-starter-data-redis" pom.xml; then 
             dependencies="${dependencies}spring-data-redis, "
-            slice_tests="${slice_tests}@DataRedisTest, "
           fi
           
-          # Check for Spring Data MongoDB (enables @DataMongoTest)
+          # Check for Spring Data MongoDB
           if grep -q "spring-boot-starter-data-mongodb" pom.xml; then 
             dependencies="${dependencies}spring-data-mongodb, "
-            slice_tests="${slice_tests}@DataMongoTest, "
           fi
           
           # Check for Spring Kafka
@@ -141,19 +135,15 @@ jobs:
             dependencies="${dependencies}spring-amqp, "
           fi
           
-          # Check for WebFlux (enables @WebFluxTest)
+          # Check for WebFlux
           if grep -q "spring-boot-starter-webflux" pom.xml; then 
             dependencies="${dependencies}spring-webflux, "
-            slice_tests="${slice_tests}@WebFluxTest, "
           fi
           
           dependencies="${dependencies%, }"
-          slice_tests="${slice_tests%, }"
           echo "dependencies=${dependencies}" >> $GITHUB_OUTPUT
-          echo "slice_tests=${slice_tests}" >> $GITHUB_OUTPUT
           
           echo "Detected dependencies: ${dependencies}"
-          echo "Applicable slice tests: ${slice_tests}"
 
       - name: Create or update issue to trigger Copilot Coding Agent
         if: steps.parse_branch.outputs.should_skip == 'false'
@@ -165,7 +155,6 @@ jobs:
             const changedFiles = `${{ steps.parse_branch.outputs.changed_files }}`;
             const frameworksHint = '${{ steps.parse_branch.outputs.frameworks_hint }}' || '${{ steps.analyze.outputs.frameworks }}';
             const dependencies = '${{ steps.analyze.outputs.dependencies }}';
-            const sliceTests = '${{ steps.analyze.outputs.slice_tests }}';
             const issueTitle = `Generate tests for branch ${branch} (sit-test-repo)`;
             
             const issueBody = `Please analyze the sit-test-repo repo on branch '${branch}' and generate tests for changed Java sources.
@@ -176,7 +165,6 @@ jobs:
             ${changedFiles || 'Analyze all recent changes on branch'}
             - Existing test frameworks detected: ${frameworksHint || 'None detected'}
             - Dependencies found in pom.xml: ${dependencies || 'None detected'}
-            - Applicable slice tests: ${sliceTests || 'None applicable'}
 
             **CRITICAL - Branch Context:**
             - This workflow is running on branch '${branch}'
@@ -189,10 +177,6 @@ jobs:
             2. **Use existing frameworks**: Prefer test frameworks already in use: ${frameworksHint || 'JUnit 5, Mockito, Spring Boot Test (defaults)'}.
             3. **Generate appropriate test types**:
                - **Unit tests**: Always generate for changed classes using JUnit 5 + Mockito for mocking.
-               - **Slice tests**: ONLY generate slice tests for dependencies actually present in pom.xml:
-                 ${sliceTests ? `- Use: ${sliceTests}` : '- No slice tests applicable (no Spring web/data dependencies found)'}
-                 - Do NOT use @DataJpaTest if only spring-data-jdbc is present; use @DataJdbcTest instead.
-                 - Do NOT use @WebMvcTest if only webflux is present; use @WebFluxTest instead.
                - **Integration tests**: 
                  - **MANDATORY**: MUST use Testcontainers for all integration tests
                  - **DO NOT** use TestRestTemplate, @SpringBootTest without containers, or in-memory databases
